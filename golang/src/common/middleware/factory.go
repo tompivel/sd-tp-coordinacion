@@ -205,3 +205,94 @@ func CreateTopicProducerMiddleware(exchange string, routingKeys []string, connec
 	}, nil
 }
 
+func CreateNamedFanoutConsumerMiddleware(exchange string, queueName string, connectionSettings ConnSettings) (Middleware, error) {
+	base, err := NewBaseMiddleware(connectionSettings)
+	if err != nil {
+		return nil, err
+	}
+
+	success := false
+	defer func() {
+		if !success {
+			base.Close()
+		}
+	}()
+
+	err = base.ch.ExchangeDeclare(
+		exchange,
+		FanoutExchange,
+		Transient,
+		Keep,
+		NonInternal,
+		Wait,
+		nil,
+	)
+	if err != nil {
+		return nil, ErrMessageMiddlewareDisconnected
+	}
+
+	_, err = base.ch.QueueDeclare(
+		queueName,
+		Transient,
+		Keep,
+		Shared,
+		Wait,
+		nil,
+	)
+	if err != nil {
+		return nil, ErrMessageMiddlewareDisconnected
+	}
+
+	err = base.ch.QueueBind(
+		queueName,
+		"",
+		exchange,
+		Wait,
+		nil,
+	)
+	if err != nil {
+		return nil, ErrMessageMiddlewareDisconnected
+	}
+
+	success = true
+	return &ExchangeMiddleware{
+		BaseMiddleware: base,
+		exchangeName:   exchange,
+		routingKeys:    []string{""},
+		queueName:      queueName,
+	}, nil
+}
+
+func CreateFanoutProducerMiddleware(exchange string, connectionSettings ConnSettings) (Middleware, error) {
+	base, err := NewBaseMiddleware(connectionSettings)
+	if err != nil {
+		return nil, err
+	}
+
+	success := false
+	defer func() {
+		if !success {
+			base.Close()
+		}
+	}()
+
+	err = base.ch.ExchangeDeclare(
+		exchange,
+		FanoutExchange,
+		Transient,
+		Keep,
+		NonInternal,
+		Wait,
+		nil,
+	)
+	if err != nil {
+		return nil, ErrMessageMiddlewareDisconnected
+	}
+
+	success = true
+	return &ExchangeMiddleware{
+		BaseMiddleware: base,
+		exchangeName:   exchange,
+		routingKeys:    []string{""},
+	}, nil
+}
