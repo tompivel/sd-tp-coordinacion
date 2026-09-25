@@ -3,6 +3,7 @@ package middleware
 const (
 	DefaultExchange = ""
 	TopicExchange   = "topic"
+	FanoutExchange  = "fanout"
 	
 	Durable      = true
 	Transient    = false
