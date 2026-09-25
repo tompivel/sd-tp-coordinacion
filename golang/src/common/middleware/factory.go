@@ -91,3 +91,117 @@ func CreateExchangeMiddleware(exchange string, keys []string, connectionSettings
 		queueName:      q.Name,
 	}, nil
 }
+
+func CreateNamedTopicConsumerMiddleware(exchange string, queueName string, routingKey string, connectionSettings ConnSettings) (Middleware, error) {
+	base, err := NewBaseMiddleware(connectionSettings)
+	if err != nil {
+		return nil, err
+	}
+
+	success := false
+	defer func() {
+		if !success {
+			base.Close()
+		}
+	}()
+
+	err = base.ch.ExchangeDeclare(
+		exchange,
+		TopicExchange,
+		Transient,
+		Keep,
+		NonInternal,
+		Wait,
+		nil,
+	)
+	if err != nil {
+		return nil, ErrMessageMiddlewareDisconnected
+	}
+
+	_, err = base.ch.QueueDeclare(
+		queueName,
+		Transient,
+		Keep,
+		Shared,
+		Wait,
+		nil,
+	)
+	if err != nil {
+		return nil, ErrMessageMiddlewareDisconnected
+	}
+
+	err = base.ch.QueueBind(
+		queueName,
+		routingKey,
+		exchange,
+		Wait,
+		nil,
+	)
+	if err != nil {
+		return nil, ErrMessageMiddlewareDisconnected
+	}
+
+	success = true
+	return &ExchangeMiddleware{
+		BaseMiddleware: base,
+		exchangeName:   exchange,
+		routingKeys:    []string{routingKey},
+		queueName:      queueName,
+	}, nil
+}
+
+func CreateTopicProducerMiddleware(exchange string, routingKeys []string, connectionSettings ConnSettings) (Middleware, error) {
+	base, err := NewBaseMiddleware(connectionSettings)
+	if err != nil {
+		return nil, err
+	}
+
+	success := false
+	defer func() {
+		if !success {
+			base.Close()
+		}
+	}()
+
+	err = base.ch.ExchangeDeclare(
+		exchange,
+		TopicExchange,
+		Transient,
+		Keep,
+		NonInternal,
+		Wait,
+		nil,
+	)
+	if err != nil {
+		return nil, ErrMessageMiddlewareDisconnected
+	}
+
+	// Declare and bind all known downstream queues so messages are never dropped if sent early
+	for _, key := range routingKeys {
+		_, err = base.ch.QueueDeclare(
+			key,
+			Transient,
+			Keep,
+			Shared,
+			Wait,
+			nil,
+		)
+		if err == nil {
+			_ = base.ch.QueueBind(
+				key,
+				key,
+				exchange,
+				Wait,
+				nil,
+			)
+		}
+	}
+
+	success = true
+	return &ExchangeMiddleware{
+		BaseMiddleware: base,
+		exchangeName:   exchange,
+		routingKeys:    routingKeys,
+	}, nil
+}
+
