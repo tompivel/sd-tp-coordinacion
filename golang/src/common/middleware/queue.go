@@ -20,3 +20,11 @@ func (q *QueueMiddleware) Send(msg Message) error {
 
 	return q.BaseMiddleware.PublishWithTimeout(DefaultExchange, q.queueName, msg, 5*time.Second)
 }
+
+func (q *QueueMiddleware) SendTo(routingKey string, msg Message) error {
+	if q.conn.IsClosed() {
+		return ErrMessageMiddlewareDisconnected
+	}
+
+	return q.BaseMiddleware.PublishWithTimeout(DefaultExchange, routingKey, msg, 5*time.Second)
+}

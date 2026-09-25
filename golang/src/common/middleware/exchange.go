@@ -35,3 +35,11 @@ func (e *ExchangeMiddleware) Send(msg Message) error {
 
 	return nil
 }
+
+func (e *ExchangeMiddleware) SendTo(routingKey string, msg Message) error {
+	if e.conn.IsClosed() {
+		return ErrMessageMiddlewareDisconnected
+	}
+
+	return e.BaseMiddleware.PublishWithTimeout(e.exchangeName, routingKey, msg, 5*time.Second)
+}
