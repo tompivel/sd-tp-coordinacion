@@ -10,11 +10,13 @@ import (
 )
 
 type BaseMiddleware struct {
-	conn         *amqp.Connection
-	ch           *amqp.Channel
-	mu           sync.Mutex
-	isConsuming  bool
-	consumerTag  string
+	conn          *amqp.Connection
+	ch            *amqp.Channel
+	mu            sync.Mutex
+	pubMu         sync.Mutex
+	isConsuming   bool
+	consumerTag   string
+	prefetchCount int
 }
 
 func NewBaseMiddleware(settings ConnSettings) (*BaseMiddleware, error) {
@@ -31,9 +33,20 @@ func NewBaseMiddleware(settings ConnSettings) (*BaseMiddleware, error) {
 	}
 
 	return &BaseMiddleware{
-		conn: conn,
-		ch:   ch,
+		conn:          conn,
+		ch:            ch,
+		prefetchCount: 1,
 	}, nil
+}
+
+func (b *BaseMiddleware) SetPrefetch(count int) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.prefetchCount = count
+	if b.ch != nil && !b.ch.IsClosed() && count > 0 {
+		return b.ch.Qos(count, 0, false)
+	}
+	return nil
 }
 
 func (b *BaseMiddleware) StartConsumingQueue(queueName string, callbackFunc func(msg Message, ack func(), nack func())) error {
@@ -46,6 +59,13 @@ func (b *BaseMiddleware) StartConsumingQueue(queueName string, callbackFunc func
 	if b.conn.IsClosed() {
 		b.mu.Unlock()
 		return ErrMessageMiddlewareDisconnected
+	}
+
+	if b.prefetchCount > 0 {
+		if err := b.ch.Qos(b.prefetchCount, 0, false); err != nil {
+			b.mu.Unlock()
+			return ErrMessageMiddlewareMessage
+		}
 	}
 
 	// unique consumer tag
@@ -142,6 +162,9 @@ func (b *BaseMiddleware) Close() error {
 }
 
 func (b *BaseMiddleware) PublishWithTimeout(exchange, routingKey string, msg Message, timeout time.Duration) error {
+	b.pubMu.Lock()
+	defer b.pubMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
