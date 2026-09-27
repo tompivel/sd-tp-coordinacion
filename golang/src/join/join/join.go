@@ -2,7 +2,11 @@ package join
 
 import (
 	"log/slog"
+	"sort"
+	"sync"
 
+	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/fruititem"
+	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/messageprotocol/inner"
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/middleware"
 )
 
@@ -19,8 +23,12 @@ type JoinConfig struct {
 }
 
 type Join struct {
-	inputQueue  middleware.Middleware
-	outputQueue middleware.Middleware
+	config       JoinConfig
+	inputQueue   middleware.Middleware
+	outputQueue  middleware.Middleware
+	partialTops  map[string][]fruititem.FruitItem // clientID -> combined records
+	receivedTops map[string]map[int]bool         // clientID -> aggID -> bool
+	mu           sync.Mutex
 }
 
 func NewJoin(config JoinConfig) (*Join, error) {
@@ -37,7 +45,13 @@ func NewJoin(config JoinConfig) (*Join, error) {
 		return nil, err
 	}
 
-	return &Join{inputQueue: inputQueue, outputQueue: outputQueue}, nil
+	return &Join{
+		config:       config,
+		inputQueue:   inputQueue,
+		outputQueue:  outputQueue,
+		partialTops:  make(map[string][]fruititem.FruitItem),
+		receivedTops: make(map[string]map[int]bool),
+	}, nil
 }
 
 func (join *Join) Run() {
