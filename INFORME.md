@@ -156,3 +156,18 @@ sequenceDiagram
     Note over A1: Recibió EOF de S0 y S1 (N=2) -> Barrera Completa!
 ```
 
+---
+
+## 4. Coordinación entre `Aggregation` y `Join`
+
+Una vez superada la barrera en los Aggregators, se genera la consolidación final hacia el nodo `Join`.
+
+### 4.1 Reducción Temprana
+
+Si un dataset cuenta con miles de frutas distintas asignadas a un Aggregator, transmitir la totalidad de las sumas parciales saturaría la red y trasladaría una carga excesiva al nodo `Join`, el cual (por restricciones de consigna), es único. Para conciliar los tops parciales y el top global, se tuvo en cuenta la siguiente propiedad matemática: *Si un ítem no forma parte del Top-$K$ de su propia partición disjunta, es imposible que pertenezca al Top-$K$ global del cliente*.
+
+Por tanto, al completarse la barrera, el `AggregatorSessionStore` delega en el acumulador y la función de dominio `ComputeTop`, ordenando las frutas locales de manera descendente según `FruitItem.Less()`:
+
+$$\text{finalTopSize} = \min(K, \text{len}(\text{fruitItems}))$$
+
+y envía únicamente a lo sumo $K$ elementos empaquetados en un único mensaje `TOP`.
