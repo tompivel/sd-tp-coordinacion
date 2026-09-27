@@ -171,3 +171,14 @@ Por tanto, al completarse la barrera, el `AggregatorSessionStore` delega en el a
 $$\text{finalTopSize} = \min(K, \text{len}(\text{fruitItems}))$$
 
 y envía únicamente a lo sumo $K$ elementos empaquetados en un único mensaje `TOP`.
+
+### 4.2 Barrera de Sincronización en `Join`
+
+El nodo `Join` (instancia única) consume de la cola `join_queue`, delegando la recolección y la barrera en su `JoinSessionStore`. El flujo de ejecución se puede resumir como:
+
+1. **Recepción de Tops Parciales:** Por cada mensaje `TOP` recibido, el store incorpora los registros al buffer del cliente y registra al emisor en su `Barrier` interna (`aggID`).
+2. **Condición de Disparo:** La consolidación global para un cliente se ejecuta atómicamente cuando se reciben los tops parciales de **todos los $M$ Aggregators**:
+   $$\text{barrier.IsComplete}() \iff \text{barrier.Count}() == M \quad (\text{AGGREGATION\_AMOUNT})$$
+3. **Consolidación y Egress:** Se fusionan los $M$ tops parciales (un conjunto acotado de a lo sumo $M \times K$ ítems), se reordenan de forma descendente mediante `ComputeTop`, se trunca al tamaño $K$ final y se publica el `TOP` global resultante en `results_queue`.
+4. **Entrega al Cliente en Gateway:** El `Gateway` lee de `results_queue`. En su `handleClientResponse`, itera sobre las conexiones activas invocando `DeserializeResultMessage()`. Únicamente el `MessageHandler` cuyo `clientID` coincida procesará el mensaje, lo escribirá al socket TCP del cliente correspondiente y enviará el ACK a RabbitMQ.
+
