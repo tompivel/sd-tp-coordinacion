@@ -94,3 +94,35 @@ func TestTopMessageSerialization(t *testing.T) {
 	}
 }
 
+func TestLegacyMessageCompatibility(t *testing.T) {
+	// Legacy data: [["apple", 5], ["banana", 10]]
+	legacyDataMsg := &middleware.Message{
+		Body: `[["apple", 5], ["banana", 10]]`,
+	}
+
+	records, isEOF, err := DeserializeMessage(legacyDataMsg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if isEOF {
+		t.Errorf("expected isEOF false")
+	}
+	if len(records) != 2 || records[0].Fruit != "apple" || records[0].Amount != 5 {
+		t.Errorf("unexpected records: %+v", records)
+	}
+
+	// Legacy EOF: []
+	legacyEOFMsg := &middleware.Message{
+		Body: `[]`,
+	}
+	records, isEOF, err = DeserializeMessage(legacyEOFMsg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !isEOF {
+		t.Errorf("expected isEOF true")
+	}
+	if len(records) != 0 {
+		t.Errorf("expected 0 records, got %d", len(records))
+	}
+}
