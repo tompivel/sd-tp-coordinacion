@@ -400,3 +400,14 @@ classDiagram
     Ranking --> FruitItem : ordena
 ```
 
+---
+
+## 8. Manejo de SIGTERM/SIGINT y Errores de Consumo
+
+### 8.1 Contexto y Motivación
+
+En la arquitectura base provista por el esqueleto, la captura de señales del sistema operativo estaba confinada exclusivamente al `Client` y al `Gateway`, dejando a los nodos de cómputo interno (`Sum`, `Aggregation` y `Join`) sin control explícito sobre su ciclo de vida. Al recibir una orden de detención (e.g. `docker compose stop -t 5` o `SIGTERM` emitido por el orquestador), estos procesos —que ejecutan como PID 1 dentro de sus respectivos contenedores— eran interrumpidos de manera inmediata por el manejador por defecto del runtime de Go. Esto desembocaba en:
+
+- Ruptura abrupta de los sockets TCP con RabbitMQ sin usar los handshakes de cierre AMQP (`channel.close` / `connection.close`).
+- Riesgo de abortar procesamientos activos en memoria a mitad de camino, dejando mensajes entregados sin confirmar (`ACK`) o sesiones a medio persistir.
+- Dependencia de timeouts externos forzados (`SIGKILL`) si alguna rutina quedaba bloqueada.
