@@ -233,3 +233,17 @@ Al diseñar el particionado entre los nodos `Sum` y `Aggregation`, surgió la di
 El requerimiento central del sistema establece la capacidad de procesar **grandes volúmenes de datos transmitidos desde los clientes** sin generar cuellos de botella mononodo. 
 
 Particionar por `client_id` resolvería trivialmente la coordinación, pero violaría el principio fundamental de MapReduce: el paralelismo a nivel de datos. Bajo `client_id`, la capacidad máxima de procesamiento de un flujo estaría limitada por los recursos de una sola máquina. En cambio, con `hash(fruit)`, un dataset arbitrariamente grande de un único cliente se descompone y procesa concurrentemente a través de todas las réplicas del cluster, garantizando alta disponibilidad y rendimiento horizontal.
+
+---
+
+## 6. Escalabilidad del Sistema y Gestión de Recursos
+
+El diseño implementado garantiza la escalabilidad en tres dimensiones:
+
+### 6.1 Clientes Concurrentes
+- El Gateway no bloquea el procesamiento: asigna un `clientID` secuencial protegido atómicamente a cada conexión TCP entrante y despacha los datos a la cola compartida.
+- En `Sum`, `Aggregation` y `Join`, los estados internos se gestionan de forma completamente aislada por sesión de cliente a través de sus respectivos `SessionStore`.
+- Las consultas de múltiples clientes fluyen en paralelo a través del mismo pipeline sin posibilidad de contaminación cruzada.
+
+### 6.2 Grandes Volúmenes de Datos
+### 6.3 Cantidad de Controles y Resiliencia Topológica
