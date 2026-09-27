@@ -2,10 +2,7 @@ package join
 
 import (
 	"log/slog"
-	"sort"
-	"sync"
 
-	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/fruititem"
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/messageprotocol/inner"
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/middleware"
 )
@@ -23,12 +20,10 @@ type JoinConfig struct {
 }
 
 type Join struct {
-	config       JoinConfig
-	inputQueue   middleware.Middleware
-	outputQueue  middleware.Middleware
-	partialTops  map[string][]fruititem.FruitItem // clientID -> combined records
-	receivedTops map[string]map[int]bool         // clientID -> aggID -> bool
-	mu           sync.Mutex
+	config      JoinConfig
+	inputQueue  middleware.Middleware
+	outputQueue middleware.Middleware
+	store       *JoinSessionStore
 }
 
 func NewJoin(config JoinConfig) (*Join, error) {
@@ -46,11 +41,10 @@ func NewJoin(config JoinConfig) (*Join, error) {
 	}
 
 	return &Join{
-		config:       config,
-		inputQueue:   inputQueue,
-		outputQueue:  outputQueue,
-		partialTops:  make(map[string][]fruititem.FruitItem),
-		receivedTops: make(map[string]map[int]bool),
+		config:      config,
+		inputQueue:  inputQueue,
+		outputQueue: outputQueue,
+		store:       NewJoinSessionStore(config.AggregationAmount, config.TopSize),
 	}, nil
 }
 
@@ -72,41 +66,25 @@ func (join *Join) handleMessage(msg middleware.Message, ack func(), nack func())
 		return
 	}
 
-	join.mu.Lock()
-	defer join.mu.Unlock()
-
 	clientID := innerMsg.ClientID
 	aggID := innerMsg.SenderID
 
 	slog.Info("Received top message from Aggregator", "clientID", clientID, "aggID", aggID, "records", len(innerMsg.Records))
 
-	if join.receivedTops[clientID] == nil {
-		join.receivedTops[clientID] = make(map[int]bool)
+	globalTop, ready := join.store.AddPartialTop(clientID, aggID, innerMsg.Records)
+	if !ready {
+		return
 	}
-	join.receivedTops[clientID][aggID] = true
-	join.partialTops[clientID] = append(join.partialTops[clientID], innerMsg.Records...)
 
-	if len(join.receivedTops[clientID]) == join.config.AggregationAmount {
-		slog.Info("All partial tops collected for client, producing global top", "clientID", clientID)
+	slog.Info("All partial tops collected for client, producing global top", "clientID", clientID)
 
-		allRecords := join.partialTops[clientID]
-		sort.SliceStable(allRecords, func(i, j int) bool {
-			return allRecords[j].Less(allRecords[i])
-		})
+	topMsg, err := inner.SerializeTopMessage(clientID, 0, globalTop)
+	if err != nil {
+		slog.Error("While serializing global top message", "err", err)
+		return
+	}
 
-		finalTopSize := min(join.config.TopSize, len(allRecords))
-		globalTop := allRecords[:finalTopSize]
-
-		topMsg, err := inner.SerializeTopMessage(clientID, 0, globalTop)
-		if err != nil {
-			slog.Error("While serializing global top message", "err", err)
-		} else {
-			if err := join.outputQueue.Send(*topMsg); err != nil {
-				slog.Error("While sending global top to Gateway results queue", "err", err)
-			}
-		}
-
-		delete(join.partialTops, clientID)
-		delete(join.receivedTops, clientID)
+	if err := join.outputQueue.Send(*topMsg); err != nil {
+		slog.Error("While sending global top to Gateway results queue", "err", err)
 	}
 }

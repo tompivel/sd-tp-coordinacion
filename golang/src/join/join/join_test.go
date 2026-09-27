@@ -26,6 +26,54 @@ func (m *mockMiddleware) SendTo(routingKey string, msg middleware.Message) error
 }
 func (m *mockMiddleware) Close() error { return nil }
 
+func TestJoinSessionStore(t *testing.T) {
+	store := NewJoinSessionStore(3, 3)
+
+	clientID := "client-test"
+
+	// 1st partial top
+	top, ready := store.AddPartialTop(clientID, 0, []fruititem.FruitItem{
+		{Fruit: "banana", Amount: 50},
+		{Fruit: "kiwi", Amount: 10},
+	})
+	if ready || top != nil {
+		t.Fatal("expected barrier not to be ready after 1 of 3 aggregators")
+	}
+
+	// 2nd partial top
+	top, ready = store.AddPartialTop(clientID, 1, []fruititem.FruitItem{
+		{Fruit: "apple", Amount: 100},
+		{Fruit: "mango", Amount: 20},
+	})
+	if ready || top != nil {
+		t.Fatal("expected barrier not to be ready after 2 of 3 aggregators")
+	}
+
+	// 3rd partial top (empty)
+	top, ready = store.AddPartialTop(clientID, 2, []fruititem.FruitItem{})
+	if !ready {
+		t.Fatal("expected barrier to be complete after 3 of 3 aggregators")
+	}
+
+	if len(top) != 3 {
+		t.Fatalf("expected top size 3, got %d", len(top))
+	}
+	if top[0].Fruit != "apple" || top[0].Amount != 100 {
+		t.Errorf("rank 1 mismatch: %+v", top[0])
+	}
+	if top[1].Fruit != "banana" || top[1].Amount != 50 {
+		t.Errorf("rank 2 mismatch: %+v", top[1])
+	}
+	if top[2].Fruit != "mango" || top[2].Amount != 20 {
+		t.Errorf("rank 3 mismatch: %+v", top[2])
+	}
+
+	// Session must be evicted
+	if store.HasSession(clientID) {
+		t.Error("expected session to be evicted after global top computation")
+	}
+}
+
 func TestJoinConsolidationAndBarrier(t *testing.T) {
 	mockOut := &mockMiddleware{}
 	config := JoinConfig{
@@ -34,10 +82,9 @@ func TestJoinConsolidationAndBarrier(t *testing.T) {
 	}
 
 	joinNode := &Join{
-		config:       config,
-		outputQueue:  mockOut,
-		partialTops:  make(map[string][]fruititem.FruitItem),
-		receivedTops: make(map[string]map[int]bool),
+		config:      config,
+		outputQueue: mockOut,
+		store:       NewJoinSessionStore(config.AggregationAmount, config.TopSize),
 	}
 
 	clientID := "client-test"
@@ -97,10 +144,7 @@ func TestJoinConsolidationAndBarrier(t *testing.T) {
 	}
 
 	// Verify state cleanup
-	if joinNode.partialTops[clientID] != nil {
-		t.Errorf("expected partialTops cleaned up")
-	}
-	if joinNode.receivedTops[clientID] != nil {
-		t.Errorf("expected receivedTops cleaned up")
+	if joinNode.store.HasSession(clientID) {
+		t.Errorf("expected session cleaned up after global top emission")
 	}
 }
