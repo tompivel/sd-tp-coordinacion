@@ -65,55 +65,13 @@ func DeserializeInnerMessage(message *middleware.Message) (*InnerMessage, error)
 	}
 
 	var innerMsg InnerMessage
-	if err := json.Unmarshal([]byte(message.Body), &innerMsg); err == nil && innerMsg.Type != "" {
-		return &innerMsg, nil
+	if err := json.Unmarshal([]byte(message.Body), &innerMsg); err != nil {
+		return nil, err
+	}
+	if innerMsg.Type == "" {
+		return nil, errors.New("invalid or empty message type in inner message")
 	}
 
-	// Fallback to legacy format: [[fruit, amount], ...]
-	var legacyData []interface{}
-	if err := json.Unmarshal([]byte(message.Body), &legacyData); err == nil {
-		if len(legacyData) == 0 {
-			return &InnerMessage{Type: MsgEOF}, nil
-		}
-		var fruitRecords []fruititem.FruitItem
-		for _, datum := range legacyData {
-			pair, ok := datum.([]interface{})
-			if !ok || len(pair) < 2 {
-				continue
-			}
-			fruit, ok1 := pair[0].(string)
-			amount, ok2 := pair[1].(float64)
-			if ok1 && ok2 {
-				fruitRecords = append(fruitRecords, fruititem.FruitItem{
-					Fruit:  fruit,
-					Amount: uint32(amount),
-				})
-			}
-		}
-		return &InnerMessage{
-			Type:    MsgData,
-			Records: fruitRecords,
-		}, nil
-	}
-
-	return nil, errors.New("failed to deserialize inner message")
+	return &innerMsg, nil
 }
 
-// Legacy wrappers to prevent breaking unupdated components:
-func SerializeMessage(fruitRecords []fruititem.FruitItem) (*middleware.Message, error) {
-	if len(fruitRecords) == 0 {
-		return SerializeEOFMessage("", 0)
-	}
-	return SerializeDataMessage("", fruitRecords)
-}
-
-func DeserializeMessage(message *middleware.Message) ([]fruititem.FruitItem, bool, error) {
-	innerMsg, err := DeserializeInnerMessage(message)
-	if err != nil {
-		return nil, false, err
-	}
-	if innerMsg.Type == MsgEOF {
-		return nil, true, nil
-	}
-	return innerMsg.Records, false, nil
-}

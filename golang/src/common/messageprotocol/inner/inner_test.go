@@ -94,35 +94,21 @@ func TestTopMessageSerialization(t *testing.T) {
 	}
 }
 
-func TestLegacyMessageCompatibility(t *testing.T) {
-	// Legacy data: [["apple", 5], ["banana", 10]]
-	legacyDataMsg := &middleware.Message{
-		Body: `[["apple", 5], ["banana", 10]]`,
+func TestDeserializeInnerMessageErrors(t *testing.T) {
+	// Nil message
+	if _, err := DeserializeInnerMessage(nil); err == nil {
+		t.Errorf("expected error for nil message")
 	}
 
-	records, isEOF, err := DeserializeMessage(legacyDataMsg)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if isEOF {
-		t.Errorf("expected isEOF false")
-	}
-	if len(records) != 2 || records[0].Fruit != "apple" || records[0].Amount != 5 {
-		t.Errorf("unexpected records: %+v", records)
+	// Invalid JSON
+	invalidJsonMsg := &middleware.Message{Body: "{invalid json"}
+	if _, err := DeserializeInnerMessage(invalidJsonMsg); err == nil {
+		t.Errorf("expected error for invalid json")
 	}
 
-	// Legacy EOF: []
-	legacyEOFMsg := &middleware.Message{
-		Body: `[]`,
-	}
-	records, isEOF, err = DeserializeMessage(legacyEOFMsg)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !isEOF {
-		t.Errorf("expected isEOF true")
-	}
-	if len(records) != 0 {
-		t.Errorf("expected 0 records, got %d", len(records))
+	// Empty type
+	emptyTypeMsg := &middleware.Message{Body: `{"client_id": "c1"}`}
+	if _, err := DeserializeInnerMessage(emptyTypeMsg); err == nil {
+		t.Errorf("expected error for empty message type")
 	}
 }
