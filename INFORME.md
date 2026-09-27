@@ -182,3 +182,36 @@ El nodo `Join` (instancia única) consume de la cola `join_queue`, delegando la 
 3. **Consolidación y Egress:** Se fusionan los $M$ tops parciales (un conjunto acotado de a lo sumo $M \times K$ ítems), se reordenan de forma descendente mediante `ComputeTop`, se trunca al tamaño $K$ final y se publica el `TOP` global resultante en `results_queue`.
 4. **Entrega al Cliente en Gateway:** El `Gateway` lee de `results_queue`. En su `handleClientResponse`, itera sobre las conexiones activas invocando `DeserializeResultMessage()`. Únicamente el `MessageHandler` cuyo `clientID` coincida procesará el mensaje, lo escribirá al socket TCP del cliente correspondiente y enviará el ACK a RabbitMQ.
 
+### 4.3 Diagrama de Secuencia: Coordinación Aggregation $\to$ Join $\to$ Gateway
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A0 as Aggregator 0
+    participant A1 as Aggregator 1
+    participant JQ as Queue (join_queue)
+    participant J as Join (Singleton)
+    participant RQ as Queue (results_queue)
+    participant GW as Gateway
+    actor C1 as Client 1 (TCP)
+
+    Note over A0,A1: Barreras alcanzadas en Aggregators
+    A0->>JQ: TOP(clientID: "client-1", sender: 0, [("manzana", 15)])
+    A1->>JQ: TOP(clientID: "client-1", sender: 1, [("banana", 20)])
+
+    JQ-->>J: TOP(sender: 0)
+    Note over J: Recibido 1 de M=2 tops. Espera...
+    JQ-->>J: TOP(sender: 1)
+    Note over J: Recibido 2 de M=2 tops -> Barrera Completa!
+
+    Note over J: Merge de [manzana:15, banana:20] -> ComputeTop (descendente) -> Trunca Top-3
+    J->>RQ: TOP(clientID: "client-1", [("banana", 20), ("manzana", 15)])
+
+    RQ-->>GW: TOP(clientID: "client-1", ...)
+    Note over GW: MessageHandler("client-1") reconoce su ID
+    GW->>C1: FRUIT_TOP [("banana", 20), ("manzana", 15)]
+    C1-->>GW: ACK
+    Note over GW: Remueve cliente del registry y hace ACK en RabbitMQ
+```
+
+---
