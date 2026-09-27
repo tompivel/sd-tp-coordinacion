@@ -297,3 +297,106 @@ En cada nodo del pipeline se desacopló el middleware de transporte del estado i
   * Asocia a cada cliente un buffer consolidado de registros y un `Barrier` de $M$ Aggregators.
   * `AddPartialTop(clientID, aggID, records)`: Acumula los tops parciales. Al completarse la barrera de todos los Aggregators, ejecuta `ComputeTop()`, desaloja la sesión y retorna el Top-K global final.
 
+### 7.3 Diagrama de Clases: Separación entre Orquestación y Dominio
+
+```mermaid
+classDiagram
+    class Sum {
+        -SumConfig config
+        -Middleware inputQueue
+        -Middleware outputExchange
+        -Middleware eofFanoutConsumer
+        -Middleware eofFanoutProducer
+        -SumSessionStore store
+        +Run()
+        -handleDataMessage()
+        -handleGatewayEOF()
+        -handleEofFanoutMessage()
+    }
+
+    class SumSessionStore {
+        -map~string, clientSession~ sessions
+        -sync.Mutex mu
+        +AddRecords(clientID, records) bool
+        +FinishAndEvict(clientID) ([]FruitItem, bool)
+        +IsFinished(clientID) bool
+    }
+
+    class Aggregation {
+        -AggregationConfig config
+        -Middleware inputExchange
+        -Middleware outputQueue
+        -AggregatorSessionStore store
+        +Run()
+        -handleDataMessage()
+        -handleEOFMessage()
+    }
+
+    class AggregatorSessionStore {
+        -map~string, clientSession~ sessions
+        -int sumAmount
+        -int topSize
+        -sync.Mutex mu
+        +AddRecords(clientID, records)
+        +RecordEOF(clientID, sumID) ([]FruitItem, bool)
+    }
+
+    class Join {
+        -JoinConfig config
+        -Middleware inputQueue
+        -Middleware outputQueue
+        -JoinSessionStore store
+        +Run()
+        -handleMessage()
+    }
+
+    class JoinSessionStore {
+        -map~string, clientSession~ sessions
+        -int aggregationAmount
+        -int topSize
+        -sync.Mutex mu
+        +AddPartialTop(clientID, aggID, records) ([]FruitItem, bool)
+    }
+
+    class Barrier {
+        -int required
+        -map~int, bool~ received
+        +Record(senderID int) bool
+        +IsComplete() bool
+        +Count() int
+        +Reset()
+    }
+
+    class FruitAccumulator {
+        -map~string, FruitItem~ items
+        +Add(FruitItem)
+        +AddAll([]FruitItem)
+        +All() []FruitItem
+        +Top(k int) []FruitItem
+    }
+
+    class Ranking {
+        <<utility>>
+        +ComputeTop(records []FruitItem, k int) []FruitItem
+    }
+
+    class FruitItem {
+        +string Fruit
+        +uint32 Amount
+        +Sum(FruitItem) FruitItem
+        +Less(FruitItem) bool
+    }
+
+    Sum --> SumSessionStore : delega estado en
+    SumSessionStore --> FruitAccumulator : contiene
+    Aggregation --> AggregatorSessionStore : delega estado en
+    AggregatorSessionStore --> FruitAccumulator : contiene
+    AggregatorSessionStore --> Barrier : contiene
+    Join --> JoinSessionStore : delega estado en
+    JoinSessionStore --> Barrier : contiene
+    JoinSessionStore ..> Ranking : usa
+    FruitAccumulator ..> Ranking : usa
+    FruitAccumulator --> FruitItem : acumula
+    Ranking --> FruitItem : ordena
+```
+
