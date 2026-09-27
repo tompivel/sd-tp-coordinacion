@@ -65,7 +65,48 @@ func (join *Join) Run() {
 
 func (join *Join) handleMessage(msg middleware.Message, ack func(), nack func()) {
 	defer ack()
-	if err := join.outputQueue.Send(msg); err != nil {
-		slog.Error("While sending top", "err", err)
+
+	innerMsg, err := inner.DeserializeInnerMessage(&msg)
+	if err != nil {
+		slog.Error("While deserializing message in Join", "err", err)
+		return
+	}
+
+	join.mu.Lock()
+	defer join.mu.Unlock()
+
+	clientID := innerMsg.ClientID
+	aggID := innerMsg.SenderID
+
+	slog.Info("Received top message from Aggregator", "clientID", clientID, "aggID", aggID, "records", len(innerMsg.Records))
+
+	if join.receivedTops[clientID] == nil {
+		join.receivedTops[clientID] = make(map[int]bool)
+	}
+	join.receivedTops[clientID][aggID] = true
+	join.partialTops[clientID] = append(join.partialTops[clientID], innerMsg.Records...)
+
+	if len(join.receivedTops[clientID]) == join.config.AggregationAmount {
+		slog.Info("All partial tops collected for client, producing global top", "clientID", clientID)
+
+		allRecords := join.partialTops[clientID]
+		sort.SliceStable(allRecords, func(i, j int) bool {
+			return allRecords[j].Less(allRecords[i])
+		})
+
+		finalTopSize := min(join.config.TopSize, len(allRecords))
+		globalTop := allRecords[:finalTopSize]
+
+		topMsg, err := inner.SerializeTopMessage(clientID, 0, globalTop)
+		if err != nil {
+			slog.Error("While serializing global top message", "err", err)
+		} else {
+			if err := join.outputQueue.Send(*topMsg); err != nil {
+				slog.Error("While sending global top to Gateway results queue", "err", err)
+			}
+		}
+
+		delete(join.partialTops, clientID)
+		delete(join.receivedTops, clientID)
 	}
 }
