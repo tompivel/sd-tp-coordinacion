@@ -69,7 +69,7 @@ classDiagram
     InnerMessage --> MessageType : tiene
     InnerMessage --> FruitItem : transporta
 
-    note for InnerMessage "DATA: Empleado por Gateway->Sum y Sum->Aggregator\nEOF: Empleado por Gateway->Sum, Sum->Sum y Sum->Aggregator\nTOP: Empleado por Aggregator->Join y Join->Gateway"
+    note for InnerMessage "DATA: Empleado por Gateway->Sum y Sum->Aggregator, EOF: Empleado por Gateway->Sum, Sum->Sum y Sum->Aggregator, TOP: Empleado por Aggregator->Join y Join->Gateway"
 ```
 
 ---
@@ -115,8 +115,8 @@ sequenceDiagram
     actor GW as Gateway
     participant S0 as Sum 0
     participant S1 as Sum 1
-    participant ExEOF as Exchange (sum_eof)
-    participant ExAgg as Exchange (sum_agg)
+    participant ExEOF as Exchange (sum-eof)
+    participant ExAgg as Exchange (sum-agg)
     participant A0 as Aggregator 0 (hash mod M = 0)
     participant A1 as Aggregator 1 (hash mod M = 1)
 
@@ -136,19 +136,19 @@ sequenceDiagram
 
     par Flush de S0
         Note over S0: hash("manzana") % 2 = 0
-        S0->>ExAgg: DATA(clientID, "manzana", 15) -> rkey: agg_0
+        S0->>ExAgg: DATA(clientID, "manzana", 15) -> rkey: agg-0
         ExAgg-->>A0: DATA("manzana", 15)
-        S0->>ExAgg: EOF(clientID, sender: S0) -> rkey: agg_0
+        S0->>ExAgg: EOF(clientID, sender: S0) -> rkey: agg-0
         ExAgg-->>A0: EOF(sender: S0)
-        S0->>ExAgg: EOF(clientID, sender: S0) -> rkey: agg_1
+        S0->>ExAgg: EOF(clientID, sender: S0) -> rkey: agg-1
         ExAgg-->>A1: EOF(sender: S0)
     and Flush de S1 (al recibir fanout)
         Note over S1: hash("banana") % 2 = 1
-        S1->>ExAgg: DATA(clientID, "banana", 20) -> rkey: agg_1
+        S1->>ExAgg: DATA(clientID, "banana", 20) -> rkey: agg-1
         ExAgg-->>A1: DATA("banana", 20)
-        S1->>ExAgg: EOF(clientID, sender: S1) -> rkey: agg_0
+        S1->>ExAgg: EOF(clientID, sender: S1) -> rkey: agg-0
         ExAgg-->>A0: EOF(sender: S1)
-        S1->>ExAgg: EOF(clientID, sender: S1) -> rkey: agg_1
+        S1->>ExAgg: EOF(clientID, sender: S1) -> rkey: agg-1
         ExAgg-->>A1: EOF(sender: S1)
     end
 
@@ -222,10 +222,10 @@ Al diseñar el particionado entre los nodos `Sum` y `Aggregation`, surgió la di
 
 | Criterio | Particionado por `fruit` (Diseño Implementado) | Particionado por `client_id` (Alternativa) |
 | :--- | :--- | :--- |
-| **Escalabilidad ante grandes volúmenes de datos por cliente** | **Excelente:** Si un solo cliente envía 10 GB de datos con gran variedad de frutas, el volumen y cómputo de sumas se balancea equitativamente entre los $M$ Aggregators. | **Pésima (Cuello de botella):** Todo el volumen de datos del cliente recae sobre un único Aggregator. Los restantes $M-1$ Aggregators permanecen ociosos para ese cliente. |
+| **Escalabilidad ante grandes volúmenes de datos por cliente** | **Muy bueno:** Si un solo cliente envía 10 GB de datos con gran variedad de frutas, el volumen y cómputo de sumas se balancea equitativamente entre los $M$ Aggregators. | **Pésima (Cuello de botella):** Todo el volumen de datos del cliente recae sobre un único Aggregator. Los restantes $M-1$ Aggregators permanecen ociosos para ese cliente. |
 | **Aprovechamiento de réplicas con pocos clientes** | **Óptimo:** Incluso con 1 solo cliente (Escenario 1), todos los $M$ Aggregators trabajan en paralelo procesando subconjuntos de frutas. | **Nulo:** Si hay 1 cliente y 10 Aggregators, 9 instancias estarán al 0% de uso. |
 | **Redundancia de cómputo** | **Cero:** Cada fruta es procesada y acumulada en una única instancia de Aggregation. | **Cero:** Cada cliente es procesado por un único Aggregator. |
-| **Tráfico hacia el nodo `Join`** | **Mínimo y acotado ($O(M \times K)$):** Cada Aggregator envía a lo sumo su Top-$K$ parcial. | **Mínimo ($O(K)$):** El único Aggregator asignado al cliente calcula el Top final y lo envía directo. |
+| **Tráfico hacia el nodo `Join`** | **(O(MxK)):** Cada Aggregator envía a lo sumo su Top-$K$ parcial. | **(O(K)):** El único Aggregator asignado al cliente calcula el Top final y lo envía directo. |
 | **Complejidad de Coordinación** | **Mayor (Requiere barrera):** Cada Aggregator debe esperar los $N$ EOFs de todos los Sum workers antes de resolver su Top parcial. | **Baja:** El Aggregator solo necesita esperar que termine ese cliente, sin cruces entre múltiples particiones. |
 
 ### Justificación de la Elección de `fruit`
