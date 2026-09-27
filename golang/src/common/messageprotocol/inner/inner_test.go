@@ -63,3 +63,34 @@ func TestEOFMessageSerialization(t *testing.T) {
 	}
 }
 
+func TestTopMessageSerialization(t *testing.T) {
+	clientID := "client-1"
+	senderID := 2
+	records := []fruititem.FruitItem{
+		{Fruit: "mango", Amount: 100},
+	}
+
+	msg, err := SerializeTopMessage(clientID, senderID, records)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	deserialized, err := DeserializeInnerMessage(msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if deserialized.Type != MsgTop {
+		t.Errorf("expected type %s, got %s", MsgTop, deserialized.Type)
+	}
+	if deserialized.ClientID != clientID {
+		t.Errorf("expected clientID %s, got %s", clientID, deserialized.ClientID)
+	}
+	if deserialized.SenderID != senderID {
+		t.Errorf("expected senderID %d, got %d", senderID, deserialized.SenderID)
+	}
+	if len(deserialized.Records) != 1 || deserialized.Records[0].Fruit != "mango" {
+		t.Errorf("unexpected records: %+v", deserialized.Records)
+	}
+}
+
