@@ -8,32 +8,6 @@ import (
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/middleware"
 )
 
-type mockMiddleware struct {
-	sentMessages       []middleware.Message
-	stopConsumingCount int
-	closeCount         int
-}
-
-func (m *mockMiddleware) StartConsuming(callbackFunc func(msg middleware.Message, ack func(), nack func())) error {
-	return nil
-}
-func (m *mockMiddleware) StopConsuming() error {
-	m.stopConsumingCount++
-	return nil
-}
-func (m *mockMiddleware) Send(msg middleware.Message) error {
-	m.sentMessages = append(m.sentMessages, msg)
-	return nil
-}
-func (m *mockMiddleware) SendTo(routingKey string, msg middleware.Message) error {
-	m.sentMessages = append(m.sentMessages, msg)
-	return nil
-}
-func (m *mockMiddleware) Close() error {
-	m.closeCount++
-	return nil
-}
-
 func TestAggregatorSessionStore(t *testing.T) {
 	store := NewAggregatorSessionStore(2, 3)
 
@@ -77,7 +51,7 @@ func TestAggregatorSessionStore(t *testing.T) {
 }
 
 func TestAggregationBarrier(t *testing.T) {
-	mockOut := &mockMiddleware{}
+	mockOut := middleware.NewMockMiddleware()
 	config := AggregationConfig{
 		Id:        1,
 		SumAmount: 3,
@@ -97,23 +71,23 @@ func TestAggregationBarrier(t *testing.T) {
 
 	// 1st EOF from Sum 0
 	agg.handleEOFMessage(clientID, 0)
-	if len(mockOut.sentMessages) != 0 {
+	if len(mockOut.SentMessages) != 0 {
 		t.Errorf("should not emit top yet")
 	}
 
 	// 2nd EOF from Sum 1
 	agg.handleEOFMessage(clientID, 1)
-	if len(mockOut.sentMessages) != 0 {
+	if len(mockOut.SentMessages) != 0 {
 		t.Errorf("should not emit top yet")
 	}
 
 	// 3rd EOF from Sum 2 - barrier reached
 	agg.handleEOFMessage(clientID, 2)
-	if len(mockOut.sentMessages) != 1 {
-		t.Fatalf("expected 1 emitted top message, got %d", len(mockOut.sentMessages))
+	if len(mockOut.SentMessages) != 1 {
+		t.Fatalf("expected 1 emitted top message, got %d", len(mockOut.SentMessages))
 	}
 
-	innerMsg, err := inner.DeserializeInnerMessage(&mockOut.sentMessages[0])
+	innerMsg, err := inner.DeserializeInnerMessage(&mockOut.SentMessages[0])
 	if err != nil {
 		t.Fatalf("failed to deserialize sent message: %v", err)
 	}
@@ -137,7 +111,7 @@ func TestAggregationBarrier(t *testing.T) {
 }
 
 func TestAggregationEmptyClientBarrier(t *testing.T) {
-	mockOut := &mockMiddleware{}
+	mockOut := middleware.NewMockMiddleware()
 	config := AggregationConfig{
 		Id:        0,
 		SumAmount: 2,
@@ -155,11 +129,11 @@ func TestAggregationEmptyClientBarrier(t *testing.T) {
 	agg.handleEOFMessage(clientID, 0)
 	agg.handleEOFMessage(clientID, 1)
 
-	if len(mockOut.sentMessages) != 1 {
-		t.Fatalf("expected 1 emitted message for empty client, got %d", len(mockOut.sentMessages))
+	if len(mockOut.SentMessages) != 1 {
+		t.Fatalf("expected 1 emitted message for empty client, got %d", len(mockOut.SentMessages))
 	}
 
-	innerMsg, err := inner.DeserializeInnerMessage(&mockOut.sentMessages[0])
+	innerMsg, err := inner.DeserializeInnerMessage(&mockOut.SentMessages[0])
 	if err != nil {
 		t.Fatalf("failed to deserialize: %v", err)
 	}
@@ -169,8 +143,8 @@ func TestAggregationEmptyClientBarrier(t *testing.T) {
 }
 
 func TestAggregationStopIdempotent(t *testing.T) {
-	mockIn := &mockMiddleware{}
-	mockOut := &mockMiddleware{}
+	mockIn := middleware.NewMockMiddleware()
+	mockOut := middleware.NewMockMiddleware()
 
 	agg := &Aggregation{
 		inputExchange: mockIn,
@@ -181,26 +155,26 @@ func TestAggregationStopIdempotent(t *testing.T) {
 	// First Stop() call
 	agg.Stop()
 
-	if mockIn.stopConsumingCount != 1 {
-		t.Errorf("expected mockIn.StopConsuming() called once, got %d", mockIn.stopConsumingCount)
+	if mockIn.StopConsumingCount != 1 {
+		t.Errorf("expected mockIn.StopConsuming() called once, got %d", mockIn.StopConsumingCount)
 	}
-	if mockIn.closeCount != 1 {
-		t.Errorf("expected mockIn.Close() called once, got %d", mockIn.closeCount)
+	if mockIn.CloseCount != 1 {
+		t.Errorf("expected mockIn.Close() called once, got %d", mockIn.CloseCount)
 	}
-	if mockOut.closeCount != 1 {
-		t.Errorf("expected mockOut.Close() called once, got %d", mockOut.closeCount)
+	if mockOut.CloseCount != 1 {
+		t.Errorf("expected mockOut.Close() called once, got %d", mockOut.CloseCount)
 	}
 
 	// Second Stop() call (must be no-op via sync.Once)
 	agg.Stop()
 
-	if mockIn.stopConsumingCount != 1 {
-		t.Errorf("expected mockIn.StopConsuming() still called once, got %d", mockIn.stopConsumingCount)
+	if mockIn.StopConsumingCount != 1 {
+		t.Errorf("expected mockIn.StopConsuming() still called once, got %d", mockIn.StopConsumingCount)
 	}
-	if mockIn.closeCount != 1 {
-		t.Errorf("expected mockIn.Close() still called once, got %d", mockIn.closeCount)
+	if mockIn.CloseCount != 1 {
+		t.Errorf("expected mockIn.Close() still called once, got %d", mockIn.CloseCount)
 	}
-	if mockOut.closeCount != 1 {
-		t.Errorf("expected mockOut.Close() still called once, got %d", mockOut.closeCount)
+	if mockOut.CloseCount != 1 {
+		t.Errorf("expected mockOut.Close() still called once, got %d", mockOut.CloseCount)
 	}
 }

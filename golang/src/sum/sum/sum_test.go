@@ -145,34 +145,11 @@ func TestFruitHashing(t *testing.T) {
 	}
 }
 
-type mockSumMiddleware struct {
-	stopConsumingCount int
-	closeCount         int
-}
-
-func (m *mockSumMiddleware) StartConsuming(callbackFunc func(msg middleware.Message, ack func(), nack func())) error {
-	return nil
-}
-func (m *mockSumMiddleware) StopConsuming() error {
-	m.stopConsumingCount++
-	return nil
-}
-func (m *mockSumMiddleware) Send(msg middleware.Message) error {
-	return nil
-}
-func (m *mockSumMiddleware) SendTo(routingKey string, msg middleware.Message) error {
-	return nil
-}
-func (m *mockSumMiddleware) Close() error {
-	m.closeCount++
-	return nil
-}
-
 func TestSumStopIdempotent(t *testing.T) {
-	mockIn := &mockSumMiddleware{}
-	mockOut := &mockSumMiddleware{}
-	mockFanoutIn := &mockSumMiddleware{}
-	mockFanoutOut := &mockSumMiddleware{}
+	mockIn := middleware.NewMockMiddleware()
+	mockOut := middleware.NewMockMiddleware()
+	mockFanoutIn := middleware.NewMockMiddleware()
+	mockFanoutOut := middleware.NewMockMiddleware()
 
 	sumNode := &Sum{
 		inputQueue:        mockIn,
@@ -185,45 +162,45 @@ func TestSumStopIdempotent(t *testing.T) {
 	// First Stop() call
 	sumNode.Stop()
 
-	if mockIn.stopConsumingCount != 1 {
-		t.Errorf("expected mockIn.StopConsuming() called once, got %d", mockIn.stopConsumingCount)
+	if mockIn.StopConsumingCount != 1 {
+		t.Errorf("expected mockIn.StopConsuming() called once, got %d", mockIn.StopConsumingCount)
 	}
-	if mockFanoutIn.stopConsumingCount != 1 {
-		t.Errorf("expected mockFanoutIn.StopConsuming() called once, got %d", mockFanoutIn.stopConsumingCount)
+	if mockFanoutIn.StopConsumingCount != 1 {
+		t.Errorf("expected mockFanoutIn.StopConsuming() called once, got %d", mockFanoutIn.StopConsumingCount)
 	}
-	if mockIn.closeCount != 1 {
-		t.Errorf("expected mockIn.Close() called once, got %d", mockIn.closeCount)
+	if mockIn.CloseCount != 1 {
+		t.Errorf("expected mockIn.Close() called once, got %d", mockIn.CloseCount)
 	}
-	if mockOut.closeCount != 1 {
-		t.Errorf("expected mockOut.Close() called once, got %d", mockOut.closeCount)
+	if mockOut.CloseCount != 1 {
+		t.Errorf("expected mockOut.Close() called once, got %d", mockOut.CloseCount)
 	}
-	if mockFanoutIn.closeCount != 1 {
-		t.Errorf("expected mockFanoutIn.Close() called once, got %d", mockFanoutIn.closeCount)
+	if mockFanoutIn.CloseCount != 1 {
+		t.Errorf("expected mockFanoutIn.Close() called once, got %d", mockFanoutIn.CloseCount)
 	}
-	if mockFanoutOut.closeCount != 1 {
-		t.Errorf("expected mockFanoutOut.Close() called once, got %d", mockFanoutOut.closeCount)
+	if mockFanoutOut.CloseCount != 1 {
+		t.Errorf("expected mockFanoutOut.Close() called once, got %d", mockFanoutOut.CloseCount)
 	}
 
 	// Second Stop() call (must be no-op via sync.Once)
 	sumNode.Stop()
 
-	if mockIn.stopConsumingCount != 1 {
-		t.Errorf("expected mockIn.StopConsuming() still called once, got %d", mockIn.stopConsumingCount)
+	if mockIn.StopConsumingCount != 1 {
+		t.Errorf("expected mockIn.StopConsuming() still called once, got %d", mockIn.StopConsumingCount)
 	}
-	if mockFanoutIn.stopConsumingCount != 1 {
-		t.Errorf("expected mockFanoutIn.StopConsuming() still called once, got %d", mockFanoutIn.stopConsumingCount)
+	if mockFanoutIn.StopConsumingCount != 1 {
+		t.Errorf("expected mockFanoutIn.StopConsuming() still called once, got %d", mockFanoutIn.StopConsumingCount)
 	}
-	if mockIn.closeCount != 1 {
-		t.Errorf("expected mockIn.Close() still called once, got %d", mockIn.closeCount)
+	if mockIn.CloseCount != 1 {
+		t.Errorf("expected mockIn.Close() still called once, got %d", mockIn.CloseCount)
 	}
-	if mockOut.closeCount != 1 {
-		t.Errorf("expected mockOut.Close() still called once, got %d", mockOut.closeCount)
+	if mockOut.CloseCount != 1 {
+		t.Errorf("expected mockOut.Close() still called once, got %d", mockOut.CloseCount)
 	}
-	if mockFanoutIn.closeCount != 1 {
-		t.Errorf("expected mockFanoutIn.Close() still called once, got %d", mockFanoutIn.closeCount)
+	if mockFanoutIn.CloseCount != 1 {
+		t.Errorf("expected mockFanoutIn.Close() still called once, got %d", mockFanoutIn.CloseCount)
 	}
-	if mockFanoutOut.closeCount != 1 {
-		t.Errorf("expected mockFanoutOut.Close() still called once, got %d", mockFanoutOut.closeCount)
+	if mockFanoutOut.CloseCount != 1 {
+		t.Errorf("expected mockFanoutOut.Close() still called once, got %d", mockFanoutOut.CloseCount)
 	}
 }
 
