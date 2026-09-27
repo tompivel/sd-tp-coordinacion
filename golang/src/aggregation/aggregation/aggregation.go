@@ -40,8 +40,10 @@ func NewAggregation(config AggregationConfig) (*Aggregation, error) {
 		return nil, err
 	}
 
-	inputExchangeRoutingKey := []string{fmt.Sprintf("%s_%d", config.AggregationPrefix, config.Id)}
-	inputExchange, err := middleware.CreateExchangeMiddleware(config.AggregationPrefix, inputExchangeRoutingKey, connSettings)
+	queueName := fmt.Sprintf("%s_%d", config.AggregationPrefix, config.Id)
+	routingKey := fmt.Sprintf("%s_%d", config.AggregationPrefix, config.Id)
+
+	inputExchange, err := middleware.CreateNamedTopicConsumerMiddleware(config.AggregationPrefix, queueName, routingKey, connSettings)
 	if err != nil {
 		outputQueue.Close()
 		return nil, err
