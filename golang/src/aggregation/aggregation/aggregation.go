@@ -76,14 +76,14 @@ func (aggregation *Aggregation) handleMessage(msg middleware.Message, ack func()
 		return
 	}
 
-	if isEof {
-		if err := aggregation.handleEndOfRecordsMessage(); err != nil {
-			slog.Error("While handling end of record message", "err", err)
-		}
-		return
+	switch innerMsg.Type {
+	case inner.MsgData:
+		aggregation.handleDataMessage(innerMsg.ClientID, innerMsg.Records)
+	case inner.MsgEOF:
+		aggregation.handleEOFMessage(innerMsg.ClientID, innerMsg.SenderID)
+	default:
+		slog.Warn("Unknown inner message type", "type", innerMsg.Type)
 	}
-
-	aggregation.handleDataMessage(fruitRecords)
 }
 
 func (aggregation *Aggregation) handleEndOfRecordsMessage() error {
