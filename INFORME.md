@@ -278,3 +278,22 @@ Se creó el paquete `common/coordination` que define tipos de datos abstractos i
    * Provee la función pura de dominio `ComputeTop(records []FruitItem, k int) []FruitItem`.
    * Realiza un ordenamiento descendente utilizando la primitiva de comparación provista `FruitItem.Less()`.
    * Centraliza la lógica de selección de ranking, eliminando la duplicación de código entre `Aggregation` y `Join`.
+
+### 7.2 Gestores de Sesión por Nodo (`SessionStore`)
+
+En cada nodo del pipeline se desacopló el middleware de transporte del estado interno mediante sesiones dedicadas:
+
+* **`SumSessionStore` (`sum/sum/store.go`):**
+  * Administra el ciclo de vida de ingesta de cada cliente (`clientSession`).
+  * `AddRecords(clientID, records)`: Incorpora registros si el cliente está activo; rechaza escrituras si ya fue finalizado.
+  * `FinishAndEvict(clientID)`: Operación que marca al cliente como finalizado, extrae los acumulados para el flush y resetea el acumulador para liberar memoria inmediatamente. Previene race conditions entre el EOF recibido del Gateway y el EOF replicado vía fanout exchange.
+
+* **`AggregatorSessionStore` (`aggregation/aggregation/store.go`):**
+  * Asocia a cada cliente un `FruitAccumulator` y un `Barrier` de $N$ Sums.
+  * `AddRecords(clientID, records)`: Incorpora las sumas parciales recibidas de los `Sum`.
+  * `RecordEOF(clientID, sumID)`: Registra el EOF del worker. Cuando la barrera se completa, computa automáticamente el Top-K parcial (`Top(k)`) y desaloja la sesión de memoria (`delete(sessions, clientID)`), retornando los registros calculados listos para emisión.
+
+* **`JoinSessionStore` (`join/join/store.go`):**
+  * Asocia a cada cliente un buffer consolidado de registros y un `Barrier` de $M$ Aggregators.
+  * `AddPartialTop(clientID, aggID, records)`: Acumula los tops parciales. Al completarse la barrera de todos los Aggregators, ejecuta `ComputeTop()`, desaloja la sesión y retorna el Top-K global final.
+
