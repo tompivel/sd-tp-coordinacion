@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/fruititem"
+	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/middleware"
 )
 
 func TestSumSessionStore(t *testing.T) {
@@ -143,3 +144,86 @@ func TestFruitHashing(t *testing.T) {
 		t.Errorf("hashFruit partition must be in [0, 3), got %d", p1)
 	}
 }
+
+type mockSumMiddleware struct {
+	stopConsumingCount int
+	closeCount         int
+}
+
+func (m *mockSumMiddleware) StartConsuming(callbackFunc func(msg middleware.Message, ack func(), nack func())) error {
+	return nil
+}
+func (m *mockSumMiddleware) StopConsuming() error {
+	m.stopConsumingCount++
+	return nil
+}
+func (m *mockSumMiddleware) Send(msg middleware.Message) error {
+	return nil
+}
+func (m *mockSumMiddleware) SendTo(routingKey string, msg middleware.Message) error {
+	return nil
+}
+func (m *mockSumMiddleware) Close() error {
+	m.closeCount++
+	return nil
+}
+
+func TestSumStopIdempotent(t *testing.T) {
+	mockIn := &mockSumMiddleware{}
+	mockOut := &mockSumMiddleware{}
+	mockFanoutIn := &mockSumMiddleware{}
+	mockFanoutOut := &mockSumMiddleware{}
+
+	sumNode := &Sum{
+		inputQueue:        mockIn,
+		outputExchange:    mockOut,
+		eofFanoutConsumer: mockFanoutIn,
+		eofFanoutProducer: mockFanoutOut,
+		store:             NewSumSessionStore(),
+	}
+
+	// First Stop() call
+	sumNode.Stop()
+
+	if mockIn.stopConsumingCount != 1 {
+		t.Errorf("expected mockIn.StopConsuming() called once, got %d", mockIn.stopConsumingCount)
+	}
+	if mockFanoutIn.stopConsumingCount != 1 {
+		t.Errorf("expected mockFanoutIn.StopConsuming() called once, got %d", mockFanoutIn.stopConsumingCount)
+	}
+	if mockIn.closeCount != 1 {
+		t.Errorf("expected mockIn.Close() called once, got %d", mockIn.closeCount)
+	}
+	if mockOut.closeCount != 1 {
+		t.Errorf("expected mockOut.Close() called once, got %d", mockOut.closeCount)
+	}
+	if mockFanoutIn.closeCount != 1 {
+		t.Errorf("expected mockFanoutIn.Close() called once, got %d", mockFanoutIn.closeCount)
+	}
+	if mockFanoutOut.closeCount != 1 {
+		t.Errorf("expected mockFanoutOut.Close() called once, got %d", mockFanoutOut.closeCount)
+	}
+
+	// Second Stop() call (must be no-op via sync.Once)
+	sumNode.Stop()
+
+	if mockIn.stopConsumingCount != 1 {
+		t.Errorf("expected mockIn.StopConsuming() still called once, got %d", mockIn.stopConsumingCount)
+	}
+	if mockFanoutIn.stopConsumingCount != 1 {
+		t.Errorf("expected mockFanoutIn.StopConsuming() still called once, got %d", mockFanoutIn.stopConsumingCount)
+	}
+	if mockIn.closeCount != 1 {
+		t.Errorf("expected mockIn.Close() still called once, got %d", mockIn.closeCount)
+	}
+	if mockOut.closeCount != 1 {
+		t.Errorf("expected mockOut.Close() still called once, got %d", mockOut.closeCount)
+	}
+	if mockFanoutIn.closeCount != 1 {
+		t.Errorf("expected mockFanoutIn.Close() still called once, got %d", mockFanoutIn.closeCount)
+	}
+	if mockFanoutOut.closeCount != 1 {
+		t.Errorf("expected mockFanoutOut.Close() still called once, got %d", mockFanoutOut.closeCount)
+	}
+}
+

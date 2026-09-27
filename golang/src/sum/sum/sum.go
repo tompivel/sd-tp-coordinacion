@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/fruititem"
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/messageprotocol/inner"
@@ -30,6 +33,8 @@ type Sum struct {
 	eofFanoutProducer middleware.Middleware
 	store             *SumSessionStore
 	mu                sync.Mutex
+	stopOnce          sync.Once
+	wg                sync.WaitGroup
 }
 
 func NewSum(config SumConfig) (*Sum, error) {
@@ -85,24 +90,88 @@ func NewSum(config SumConfig) (*Sum, error) {
 }
 
 func (sum *Sum) Run() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+
+	consumeErr := make(chan error, 2)
+
 	if sum.eofFanoutConsumer != nil {
+		sum.wg.Add(1)
 		go func() {
+			defer sum.wg.Done()
 			err := sum.eofFanoutConsumer.StartConsuming(func(msg middleware.Message, ack, nack func()) {
 				defer ack()
 				sum.handleEofFanoutMessage(msg)
 			})
 			if err != nil {
 				slog.Error("In eofFanoutConsumer StartConsuming", "err", err)
+				consumeErr <- err
 			}
 		}()
 	}
 
-	err := sum.inputQueue.StartConsuming(func(msg middleware.Message, ack, nack func()) {
-		sum.handleGatewayMessage(msg, ack, nack)
-	})
-	if err != nil {
-		slog.Error("In inputQueue StartConsuming", "err", err)
+	sum.wg.Add(1)
+	go func() {
+		defer sum.wg.Done()
+		err := sum.inputQueue.StartConsuming(func(msg middleware.Message, ack, nack func()) {
+			sum.handleGatewayMessage(msg, ack, nack)
+		})
+		if err != nil {
+			slog.Error("In inputQueue StartConsuming", "err", err)
+			consumeErr <- err
+		}
+	}()
+
+	select {
+	case sig := <-sigChan:
+		slog.Info("Termination signal received in Sum", "signal", sig)
+	case err := <-consumeErr:
+		slog.Error("Sum consumer stopped unexpectedly", "err", err)
 	}
+
+	sum.Stop()
+}
+
+func (sum *Sum) Stop() {
+	sum.stopOnce.Do(func() {
+		slog.Info("Stopping Sum node...")
+		if sum.inputQueue != nil {
+			if err := sum.inputQueue.StopConsuming(); err != nil {
+				slog.Debug("While stopping inputQueue consuming in Sum", "err", err)
+			}
+		}
+		if sum.eofFanoutConsumer != nil {
+			if err := sum.eofFanoutConsumer.StopConsuming(); err != nil {
+				slog.Debug("While stopping eofFanoutConsumer consuming in Sum", "err", err)
+			}
+		}
+
+		// Wait for active message processing callbacks to finish and ACK
+		sum.wg.Wait()
+
+		if sum.inputQueue != nil {
+			if err := sum.inputQueue.Close(); err != nil {
+				slog.Debug("While closing inputQueue in Sum", "err", err)
+			}
+		}
+		if sum.outputExchange != nil {
+			if err := sum.outputExchange.Close(); err != nil {
+				slog.Debug("While closing outputExchange in Sum", "err", err)
+			}
+		}
+		if sum.eofFanoutConsumer != nil {
+			if err := sum.eofFanoutConsumer.Close(); err != nil {
+				slog.Debug("While closing eofFanoutConsumer in Sum", "err", err)
+			}
+		}
+		if sum.eofFanoutProducer != nil {
+			if err := sum.eofFanoutProducer.Close(); err != nil {
+				slog.Debug("While closing eofFanoutProducer in Sum", "err", err)
+			}
+		}
+		slog.Info("Sum node stopped cleanly")
+	})
 }
 
 func (sum *Sum) handleGatewayMessage(msg middleware.Message, ack func(), nack func()) {
