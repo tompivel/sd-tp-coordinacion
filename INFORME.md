@@ -215,3 +215,21 @@ sequenceDiagram
 ```
 
 ---
+
+## 5. Análisis Comparativo de la Clave de Particionado: `fruit` vs `client_id`
+
+Al diseñar el particionado entre los nodos `Sum` y `Aggregation`, surgió la disyuntiva de qué atributo utilizar como clave de ruteo: `hash(fruit)` o `hash(client_id)`.
+
+| Criterio | Particionado por `fruit` (Diseño Implementado) | Particionado por `client_id` (Alternativa) |
+| :--- | :--- | :--- |
+| **Escalabilidad ante grandes volúmenes de datos por cliente** | **Excelente:** Si un solo cliente envía 10 GB de datos con gran variedad de frutas, el volumen y cómputo de sumas se balancea equitativamente entre los $M$ Aggregators. | **Pésima (Cuello de botella):** Todo el volumen de datos del cliente recae sobre un único Aggregator. Los restantes $M-1$ Aggregators permanecen ociosos para ese cliente. |
+| **Aprovechamiento de réplicas con pocos clientes** | **Óptimo:** Incluso con 1 solo cliente (Escenario 1), todos los $M$ Aggregators trabajan en paralelo procesando subconjuntos de frutas. | **Nulo:** Si hay 1 cliente y 10 Aggregators, 9 instancias estarán al 0% de uso. |
+| **Redundancia de cómputo** | **Cero:** Cada fruta es procesada y acumulada en una única instancia de Aggregation. | **Cero:** Cada cliente es procesado por un único Aggregator. |
+| **Tráfico hacia el nodo `Join`** | **Mínimo y acotado ($O(M \times K)$):** Cada Aggregator envía a lo sumo su Top-$K$ parcial. | **Mínimo ($O(K)$):** El único Aggregator asignado al cliente calcula el Top final y lo envía directo. |
+| **Complejidad de Coordinación** | **Mayor (Requiere barrera):** Cada Aggregator debe esperar los $N$ EOFs de todos los Sum workers antes de resolver su Top parcial. | **Baja:** El Aggregator solo necesita esperar que termine ese cliente, sin cruces entre múltiples particiones. |
+
+### Justificación de la Elección de `fruit`
+
+El requerimiento central del sistema establece la capacidad de procesar **grandes volúmenes de datos transmitidos desde los clientes** sin generar cuellos de botella mononodo. 
+
+Particionar por `client_id` resolvería trivialmente la coordinación, pero violaría el principio fundamental de MapReduce: el paralelismo a nivel de datos. Bajo `client_id`, la capacidad máxima de procesamiento de un flujo estaría limitada por los recursos de una sola máquina. En cambio, con `hash(fruit)`, un dataset arbitrariamente grande de un único cliente se descompone y procesa concurrentemente a través de todas las réplicas del cluster, garantizando alta disponibilidad y rendimiento horizontal.
