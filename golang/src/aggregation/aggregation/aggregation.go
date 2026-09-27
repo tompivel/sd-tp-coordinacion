@@ -103,13 +103,35 @@ func (aggregation *Aggregation) handleDataMessage(clientID string, records []fru
 	}
 }
 
-func (aggregation *Aggregation) handleDataMessage(fruitRecords []fruititem.FruitItem) {
-	for _, fruitRecord := range fruitRecords {
-		if _, ok := aggregation.fruitItemMap[fruitRecord.Fruit]; ok {
-			aggregation.fruitItemMap[fruitRecord.Fruit] = aggregation.fruitItemMap[fruitRecord.Fruit].Sum(fruitRecord)
+func (aggregation *Aggregation) handleEOFMessage(clientID string, sumID int) {
+	aggregation.mu.Lock()
+	defer aggregation.mu.Unlock()
+
+	slog.Info("Received EOF from Sum worker", "clientID", clientID, "sumID", sumID)
+
+	if aggregation.eofsReceived[clientID] == nil {
+		aggregation.eofsReceived[clientID] = make(map[int]bool)
+	}
+	aggregation.eofsReceived[clientID][sumID] = true
+
+	// Check if all N Sum workers have reported EOF for this client
+	if len(aggregation.eofsReceived[clientID]) == aggregation.config.SumAmount {
+		slog.Info("Barrier reached for client, emitting partial top", "clientID", clientID)
+
+		partialTop := aggregation.buildFruitTop(clientID)
+
+		topMsg, err := inner.SerializeTopMessage(clientID, aggregation.config.Id, partialTop)
+		if err != nil {
+			slog.Error("While serializing partial top message", "err", err)
 		} else {
-			aggregation.fruitItemMap[fruitRecord.Fruit] = fruitRecord
+			if err := aggregation.outputQueue.Send(*topMsg); err != nil {
+				slog.Error("While sending partial top to join queue", "err", err)
+			}
 		}
+
+		// Clean up state for this client
+		delete(aggregation.fruitSums, clientID)
+		delete(aggregation.eofsReceived, clientID)
 	}
 }
 
