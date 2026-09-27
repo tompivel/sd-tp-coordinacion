@@ -55,9 +55,12 @@ func NewJoin(config JoinConfig) (*Join, error) {
 }
 
 func (join *Join) Run() {
-	join.inputQueue.StartConsuming(func(msg middleware.Message, ack, nack func()) {
+	err := join.inputQueue.StartConsuming(func(msg middleware.Message, ack, nack func()) {
 		join.handleMessage(msg, ack, nack)
 	})
+	if err != nil {
+		slog.Error("In inputQueue StartConsuming", "err", err)
+	}
 }
 
 func (join *Join) handleMessage(msg middleware.Message, ack func(), nack func()) {
