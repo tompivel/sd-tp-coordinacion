@@ -87,9 +87,24 @@ func NewSum(config SumConfig) (*Sum, error) {
 }
 
 func (sum *Sum) Run() {
-	sum.inputQueue.StartConsuming(func(msg middleware.Message, ack, nack func()) {
-		sum.handleMessage(msg, ack, nack)
+	if sum.eofFanoutConsumer != nil {
+		go func() {
+			err := sum.eofFanoutConsumer.StartConsuming(func(msg middleware.Message, ack, nack func()) {
+				defer ack()
+				sum.handleEofFanoutMessage(msg)
+			})
+			if err != nil {
+				slog.Error("In eofFanoutConsumer StartConsuming", "err", err)
+			}
+		}()
+	}
+
+	err := sum.inputQueue.StartConsuming(func(msg middleware.Message, ack, nack func()) {
+		sum.handleGatewayMessage(msg, ack, nack)
 	})
+	if err != nil {
+		slog.Error("In inputQueue StartConsuming", "err", err)
+	}
 }
 
 func (sum *Sum) handleGatewayMessage(msg middleware.Message, ack func(), nack func()) {
@@ -131,32 +146,54 @@ func (sum *Sum) handleDataMessage(clientID string, records []fruititem.FruitItem
 	}
 }
 
-func (sum *Sum) handleEndOfRecordMessage() error {
-	slog.Info("Received End Of Records message")
-	for key := range sum.fruitItemMap {
-		fruitRecord := []fruititem.FruitItem{sum.fruitItemMap[key]}
-		message, err := inner.SerializeMessage(fruitRecord)
+func (sum *Sum) handleGatewayEOF(clientID string) {
+	sum.mu.Lock()
+	defer sum.mu.Unlock()
+
+	slog.Info("Received EOF from Gateway", "clientID", clientID)
+
+	if sum.clientFinished[clientID] {
+		return
+	}
+
+	// Broadcast EOF to peer sum nodes via fanout exchange
+	if sum.config.SumAmount > 1 && sum.eofFanoutProducer != nil {
+		eofMsg, err := inner.SerializeEOFMessage(clientID, sum.config.Id)
 		if err != nil {
-			slog.Debug("While serializing message", "err", err)
-			return err
-		}
-		if err := sum.outputExchange.Send(*message); err != nil {
-			slog.Debug("While sending message", "err", err)
-			return err
+			slog.Error("While serializing EOF broadcast", "err", err)
+		} else {
+			if err := sum.eofFanoutProducer.Send(*eofMsg); err != nil {
+				slog.Error("While broadcasting EOF to peer Sum nodes", "err", err)
+			}
 		}
 	}
 
-	eofMessage := []fruititem.FruitItem{}
-	message, err := inner.SerializeMessage(eofMessage)
+	sum.flushAndFinishClient(clientID)
+}
+
+func (sum *Sum) handleEofFanoutMessage(msg middleware.Message) {
+	sum.mu.Lock()
+	defer sum.mu.Unlock()
+
+	innerMsg, err := inner.DeserializeInnerMessage(&msg)
 	if err != nil {
-		slog.Debug("While serializing EOF message", "err", err)
-		return err
+		slog.Error("While deserializing fanout EOF message", "err", err)
+		return
 	}
-	if err := sum.outputExchange.Send(*message); err != nil {
-		slog.Debug("While sending EOF message", "err", err)
-		return err
+
+	if innerMsg.Type != inner.MsgEOF {
+		return
 	}
-	return nil
+
+	clientID := innerMsg.ClientID
+	slog.Info("Received EOF from peer Sum via fanout", "clientID", clientID, "senderID", innerMsg.SenderID)
+
+	if sum.clientFinished[clientID] {
+		// Already processed for this client
+		return
+	}
+
+	sum.flushAndFinishClient(clientID)
 }
 
 func (sum *Sum) flushAndFinishClient(clientID string) {
