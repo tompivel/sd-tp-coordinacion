@@ -253,3 +253,28 @@ El diseño implementado garantiza la escalabilidad en tres dimensiones:
 - **Nombres Determinísticos de Colas:** Al evitar colas anónimas o efímeras y utilizar colas nombradas (`<PREFIX>_<ID>`), el sistema tolera desfases temporales en el arranque de contenedores (e.g. `Sum` puede comenzar a emitir hacia la cola de `Aggregation` incluso si el proceso de `Aggregation` aún está iniciando, sin perder mensajes).
 - **Invariancia ante Renombramientos:** la arquitectura se configura dinámicamente a través de las variables de entorno (`SUM_AMOUNT`, `SUM_PREFIX`, `AGGREGATION_AMOUNT`, `AGGREGATION_PREFIX`), funcionando sin requerir servicio de descubrimiento en tiempo de ejecución.
 
+---
+
+## 7. Arquitectura de Software y Encapsulamiento POO
+
+Con el objetivo de optimizar la mantenibilidad, robustez y testeabilidad del código, se realizó una refactorización aplicando POO. Se reemplazaron las estructuras anémicas y mapas anidados en los nodos por abstracciones de dominio y sesiones con encapsulamiento estricto.
+
+### 7.1 Primitivas de Dominio (`common/coordination`)
+
+Se creó el paquete `common/coordination` que define tipos de datos abstractos independientes de la infraestructura:
+
+1. **`Barrier` (`barrier.go`):**
+   * Encapsula la sincronización M-de-N para señales de finalización.
+   * Lleva el control de identificadores de emisor únicos (`Record(senderID int) bool`), deduplicando transmisiones redundantes.
+   * Expone métodos de consulta claros (`IsComplete() bool`, `Count() int`, `Reset()`).
+   * Reutilizado tanto en `Aggregation` ($N$ Sum workers) como en `Join` ($M$ Aggregator workers).
+
+2. **`FruitAccumulator` (`accumulator.go`):**
+   * Encapsula la acumulación de totales por fruta (`map[string]FruitItem`).
+   * Trata a `FruitItem` como un tipo opaco, invocando exclusivamente `FruitItem.Sum()`.
+   * Provee métodos de alto nivel: `Add()`, `AddAll()`, `Get()`, `All()` y `Top(k)`.
+
+3. **`Ranking` (`ranking.go`):**
+   * Provee la función pura de dominio `ComputeTop(records []FruitItem, k int) []FruitItem`.
+   * Realiza un ordenamiento descendente utilizando la primitiva de comparación provista `FruitItem.Less()`.
+   * Centraliza la lógica de selección de ranking, eliminando la duplicación de código entre `Aggregation` y `Join`.
