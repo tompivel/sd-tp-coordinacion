@@ -76,7 +76,7 @@ classDiagram
 
 ## 3. Coordinación entre `Sum` y `Aggregation`
 
-El pasaje entre la etapa de `Sum` (mapeo y suma local) y `Aggregation` (agrupamiento determinístico por partición y reducción) constituye el núcleo crítico de coordinación de este sistema distribuido. A continuación se detallan las decisiones de diseño y los mecanismos de resiliencia implementados:
+El pasaje entre la etapa de `Sum` (mapeo y suma local) y `Aggregation` (agrupamiento por partición y reducción) constituye el núcleo crítico de coordinación de este sistema distribuido. A continuación se detallan las decisiones de diseño y los mecanismos de resiliencia implementados:
 
 ### 3.1 Detección y Propagación de EOF
 1. **Limitación de la Cola de Entrada:** El Gateway recibe el comando `EndOfRecords` de un cliente y publica un `EOF(ClientID)` en la cola de trabajo compartida `input_queue`. Debido a la semántica de colas punto a punto de RabbitMQ (*competing consumers*), dicho mensaje es consumido por **una única réplica** de `Sum`.
