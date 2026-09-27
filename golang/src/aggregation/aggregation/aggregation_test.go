@@ -133,3 +133,35 @@ func TestAggregationBarrier(t *testing.T) {
 	}
 }
 
+func TestAggregationEmptyClientBarrier(t *testing.T) {
+	mockOut := &mockMiddleware{}
+	config := AggregationConfig{
+		Id:        0,
+		SumAmount: 2,
+		TopSize:   3,
+	}
+
+	agg := &Aggregation{
+		config:       config,
+		outputQueue:  mockOut,
+		fruitSums:    make(map[string]map[string]fruititem.FruitItem),
+		eofsReceived: make(map[string]map[int]bool),
+	}
+
+	// Client has 0 records received by this aggregator
+	clientID := "client-empty"
+	agg.handleEOFMessage(clientID, 0)
+	agg.handleEOFMessage(clientID, 1)
+
+	if len(mockOut.sentMessages) != 1 {
+		t.Fatalf("expected 1 emitted message for empty client, got %d", len(mockOut.sentMessages))
+	}
+
+	innerMsg, err := inner.DeserializeInnerMessage(&mockOut.sentMessages[0])
+	if err != nil {
+		t.Fatalf("failed to deserialize: %v", err)
+	}
+	if len(innerMsg.Records) != 0 {
+		t.Errorf("expected 0 records in partial top, got %d", len(innerMsg.Records))
+	}
+}
