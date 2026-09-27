@@ -411,3 +411,23 @@ En la arquitectura base provista por el esqueleto, la captura de señales del si
 - Ruptura abrupta de los sockets TCP con RabbitMQ sin usar los handshakes de cierre AMQP (`channel.close` / `connection.close`).
 - Riesgo de abortar procesamientos activos en memoria a mitad de camino, dejando mensajes entregados sin confirmar (`ACK`) o sesiones a medio persistir.
 - Dependencia de timeouts externos forzados (`SIGKILL`) si alguna rutina quedaba bloqueada.
+
+### 8.2 Protocolo de Graceful Shutdown
+
+Para resolver esta falencia, se implementó en `Sum`, `Aggregation` y `Join` un protocolo de terminación limpia y determinística compuesto por cuatro fases:
+
+```mermaid
+flowchart LR
+    A["Señal SIGTERM / SIGINT\no Error en Consumo"] --> B["1. StopConsuming()\n(Cancela suscripción en broker)"]
+    B --> C["2. Drenaje & WaitGroup\n(Termina callback actual & envía ACK)"]
+    C --> D["3. Close()\n(Cierra canales y sockets AMQP)"]
+    D --> E["4. Salida Limpia\n(Exit Code 0)"]
+```
+
+El flujo, más detallado, se define a continuación:
+
+1. **Captura No Bloqueante de Señales:** Cada nodo registra un canal de notificación con `os/signal` (`signal.Notify`) para interceptar tanto `syscall.SIGTERM` (utilizada por Docker) como `syscall.SIGINT` (Ctrl+C). El bucle principal de `Run()` se coordina mediante una sentencia `select` no bloqueante para el consumo.
+2. **Desuscripción en el Broker (`StopConsuming`):** Al detectar la señal, el nodo invoca `StopConsuming()` sobre sus colas y exchanges de entrada, garantizando que el broker **no despache ningún mensaje nuevo** a la réplica en proceso de apagado.
+3. **Despacho de Tareas en Vuelo:** Las goroutines que ejecutan `StartConsuming` están orquestadas bajo un `sync.WaitGroup`. Al cerrarse el canal de entregas de Go tras la desuscripción, se permite que la última entrega en procesamiento culmine su cómputo de dominio, libere los locks de exclusión mutua correspondientes (`sum.mu`) y envíe exitosamente el `ack()` al broker antes de ejecutar `wg.Done()`.
+4. **Cierre de Conexiones AMQP e Idempotencia (`Stop` con `sync.Once`):** Una vez que el `WaitGroup` certifica que ninguna goroutine continúa utilizando la infraestructura de transporte, se invocan secuencialmente los métodos `Close()` de todos los middlewares asociados (tanto de entrada como de salida y fanout). La ejecución de `Stop()` está encapsulada mediante `sync.Once`, previniendo condiciones de carrera ante señales repetidas o invocaciones concurrentes.
+
