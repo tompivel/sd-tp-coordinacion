@@ -86,31 +86,21 @@ func (aggregation *Aggregation) handleMessage(msg middleware.Message, ack func()
 	}
 }
 
-func (aggregation *Aggregation) handleEndOfRecordsMessage() error {
-	slog.Info("Received End Of Records message")
+func (aggregation *Aggregation) handleDataMessage(clientID string, records []fruititem.FruitItem) {
+	aggregation.mu.Lock()
+	defer aggregation.mu.Unlock()
 
-	fruitTopRecords := aggregation.buildFruitTop()
-	message, err := inner.SerializeMessage(fruitTopRecords)
-	if err != nil {
-		slog.Debug("While serializing top message", "err", err)
-		return err
-	}
-	if err := aggregation.outputQueue.Send(*message); err != nil {
-		slog.Debug("While sending top message", "err", err)
-		return err
+	if aggregation.fruitSums[clientID] == nil {
+		aggregation.fruitSums[clientID] = make(map[string]fruititem.FruitItem)
 	}
 
-	eofMessage := []fruititem.FruitItem{}
-	message, err = inner.SerializeMessage(eofMessage)
-	if err != nil {
-		slog.Debug("While serializing EOF message", "err", err)
-		return err
+	for _, fruitRecord := range records {
+		if existing, ok := aggregation.fruitSums[clientID][fruitRecord.Fruit]; ok {
+			aggregation.fruitSums[clientID][fruitRecord.Fruit] = existing.Sum(fruitRecord)
+		} else {
+			aggregation.fruitSums[clientID][fruitRecord.Fruit] = fruitRecord
+		}
 	}
-	if err := aggregation.outputQueue.Send(*message); err != nil {
-		slog.Debug("While sending EOF message", "err", err)
-		return err
-	}
-	return nil
 }
 
 func (aggregation *Aggregation) handleDataMessage(fruitRecords []fruititem.FruitItem) {
