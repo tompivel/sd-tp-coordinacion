@@ -248,4 +248,8 @@ El diseño implementado garantiza la escalabilidad en tres dimensiones:
 ### 6.2 Grandes Volúmenes de Datos
 - **Control de Memoria y Desalojo Atómico:** Los `SessionStore` liberan explícitamente los estados en memoria inmediatamente después de que se satisface la barrera y se envían los resultados downstream (`FinishAndEvict`, `RecordEOF`, `AddPartialTop`). Esto asegura una huella de memoria ínfima en el largo plazo respecto a la cantidad acumulada de clientes históricos.
 - **Acotación de Flujo hacia Join:** Gracias a la reducción temprana en Aggregation, el nodo `Join` recibe a lo sumo $M \times K$ pares `(fruta, cantidad)` por cliente, haciendo que el consumo de red y tiempo de ordenamiento global en Join sea despreciable e independiente del tamaño del archivo de entrada.
+
 ### 6.3 Cantidad de Controles y Resiliencia Topológica
+- **Nombres Determinísticos de Colas:** Al evitar colas anónimas o efímeras y utilizar colas nombradas (`<PREFIX>_<ID>`), el sistema tolera desfases temporales en el arranque de contenedores (e.g. `Sum` puede comenzar a emitir hacia la cola de `Aggregation` incluso si el proceso de `Aggregation` aún está iniciando, sin perder mensajes).
+- **Invariancia ante Renombramientos:** la arquitectura se configura dinámicamente a través de las variables de entorno (`SUM_AMOUNT`, `SUM_PREFIX`, `AGGREGATION_AMOUNT`, `AGGREGATION_PREFIX`), funcionando sin requerir servicio de descubrimiento en tiempo de ejecución.
+
