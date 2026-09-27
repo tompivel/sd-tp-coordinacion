@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"sync"
 
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/fruititem"
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/messageprotocol/inner"
@@ -23,10 +24,12 @@ type AggregationConfig struct {
 }
 
 type Aggregation struct {
+	config        AggregationConfig
 	outputQueue   middleware.Middleware
 	inputExchange middleware.Middleware
-	fruitItemMap  map[string]fruititem.FruitItem
-	topSize       int
+	fruitSums     map[string]map[string]fruititem.FruitItem // clientID -> fruit -> FruitItem
+	eofsReceived  map[string]map[int]bool                  // clientID -> sumID -> bool
+	mu            sync.Mutex
 }
 
 func NewAggregation(config AggregationConfig) (*Aggregation, error) {
@@ -45,10 +48,11 @@ func NewAggregation(config AggregationConfig) (*Aggregation, error) {
 	}
 
 	return &Aggregation{
+		config:        config,
 		outputQueue:   outputQueue,
 		inputExchange: inputExchange,
-		fruitItemMap:  map[string]fruititem.FruitItem{},
-		topSize:       config.TopSize,
+		fruitSums:     make(map[string]map[string]fruititem.FruitItem),
+		eofsReceived:  make(map[string]map[int]bool),
 	}, nil
 }
 
