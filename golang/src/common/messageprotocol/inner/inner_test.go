@@ -38,3 +38,28 @@ func TestDataMessageSerialization(t *testing.T) {
 	}
 }
 
+func TestEOFMessageSerialization(t *testing.T) {
+	clientID := "client-99"
+	senderID := 3
+
+	msg, err := SerializeEOFMessage(clientID, senderID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	deserialized, err := DeserializeInnerMessage(msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if deserialized.Type != MsgEOF {
+		t.Errorf("expected type %s, got %s", MsgEOF, deserialized.Type)
+	}
+	if deserialized.ClientID != clientID {
+		t.Errorf("expected clientID %s, got %s", clientID, deserialized.ClientID)
+	}
+	if deserialized.SenderID != senderID {
+		t.Errorf("expected senderID %d, got %d", senderID, deserialized.SenderID)
+	}
+}
+
