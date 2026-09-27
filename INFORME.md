@@ -39,3 +39,35 @@ type InnerMessage struct {
 - **`SenderID`:** Identificador numérico de la réplica emisora (por ejemplo, el `ID` de la instancia `Sum` o `Aggregation`), utilizado como identificador de origen para completar las barreras de sincronización.
 - **`Records`:** Colección de `FruitItem` transportados en el payload.
 
+### 2.2 Diagrama del Protocolo y Ciclo de Vida del Mensaje
+
+```mermaid
+classDiagram
+    class MessageType {
+        <<enumeration>>
+        DATA
+        EOF
+        TOP
+    }
+
+    class InnerMessage {
+        +MessageType Type
+        +string ClientID
+        +int SenderID
+        +FruitItem[] Records
+        +Serialize() Message
+    }
+
+    class FruitItem {
+        +string Fruit
+        +uint32 Amount
+        +Sum(other FruitItem) FruitItem
+        +Less(other FruitItem) bool
+    }
+
+    InnerMessage --> MessageType : tiene
+    InnerMessage --> FruitItem : transporta
+
+    note for InnerMessage "DATA: Empleado por Gateway->Sum y Sum->Aggregator\nEOF: Empleado por Gateway->Sum, Sum->Sum y Sum->Aggregator\nTOP: Empleado por Aggregator->Join y Join->Gateway"
+```
+
