@@ -113,14 +113,17 @@ func (aggregation *Aggregation) handleDataMessage(fruitRecords []fruititem.Fruit
 	}
 }
 
-func (aggregation *Aggregation) buildFruitTop() []fruititem.FruitItem {
-	fruitItems := make([]fruititem.FruitItem, 0, len(aggregation.fruitItemMap))
-	for _, item := range aggregation.fruitItemMap {
+func (aggregation *Aggregation) buildFruitTop(clientID string) []fruititem.FruitItem {
+	clientMap := aggregation.fruitSums[clientID]
+	fruitItems := make([]fruititem.FruitItem, 0, len(clientMap))
+	for _, item := range clientMap {
 		fruitItems = append(fruitItems, item)
 	}
+
 	sort.SliceStable(fruitItems, func(i, j int) bool {
 		return fruitItems[j].Less(fruitItems[i])
 	})
-	finalTopSize := min(aggregation.topSize, len(fruitItems))
+
+	finalTopSize := min(aggregation.config.TopSize, len(fruitItems))
 	return fruitItems[:finalTopSize]
 }
