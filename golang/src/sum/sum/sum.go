@@ -23,14 +23,13 @@ type SumConfig struct {
 }
 
 type Sum struct {
-	config             SumConfig
-	inputQueue         middleware.Middleware
-	outputExchange     middleware.Middleware
-	eofFanoutConsumer  middleware.Middleware
-	eofFanoutProducer  middleware.Middleware
-	fruitItemMap       map[string]map[string]fruititem.FruitItem // clientID -> fruit -> FruitItem
-	clientFinished     map[string]bool                          // clientID -> bool
-	mu                 sync.Mutex
+	config            SumConfig
+	inputQueue        middleware.Middleware
+	outputExchange    middleware.Middleware
+	eofFanoutConsumer middleware.Middleware
+	eofFanoutProducer middleware.Middleware
+	store             *SumSessionStore
+	mu                sync.Mutex
 }
 
 func NewSum(config SumConfig) (*Sum, error) {
@@ -81,8 +80,7 @@ func NewSum(config SumConfig) (*Sum, error) {
 		outputExchange:    outputExchange,
 		eofFanoutConsumer: eofFanoutConsumer,
 		eofFanoutProducer: eofFanoutProducer,
-		fruitItemMap:      make(map[string]map[string]fruititem.FruitItem),
-		clientFinished:    make(map[string]bool),
+		store:             NewSumSessionStore(),
 	}, nil
 }
 
@@ -128,21 +126,8 @@ func (sum *Sum) handleDataMessage(clientID string, records []fruititem.FruitItem
 	sum.mu.Lock()
 	defer sum.mu.Unlock()
 
-	if sum.clientFinished[clientID] {
+	if !sum.store.AddRecords(clientID, records) {
 		slog.Warn("Received data message for already finished client", "clientID", clientID)
-		return
-	}
-
-	if sum.fruitItemMap[clientID] == nil {
-		sum.fruitItemMap[clientID] = make(map[string]fruititem.FruitItem)
-	}
-
-	for _, fruitRecord := range records {
-		if existing, ok := sum.fruitItemMap[clientID][fruitRecord.Fruit]; ok {
-			sum.fruitItemMap[clientID][fruitRecord.Fruit] = existing.Sum(fruitRecord)
-		} else {
-			sum.fruitItemMap[clientID][fruitRecord.Fruit] = fruitRecord
-		}
 	}
 }
 
@@ -152,7 +137,8 @@ func (sum *Sum) handleGatewayEOF(clientID string) {
 
 	slog.Info("Received EOF from Gateway", "clientID", clientID)
 
-	if sum.clientFinished[clientID] {
+	records, ok := sum.store.FinishAndEvict(clientID)
+	if !ok {
 		return
 	}
 
@@ -168,7 +154,7 @@ func (sum *Sum) handleGatewayEOF(clientID string) {
 		}
 	}
 
-	sum.flushAndFinishClient(clientID)
+	sum.flushAndFinishClient(clientID, records)
 }
 
 func (sum *Sum) handleEofFanoutMessage(msg middleware.Message) {
@@ -188,30 +174,29 @@ func (sum *Sum) handleEofFanoutMessage(msg middleware.Message) {
 	clientID := innerMsg.ClientID
 	slog.Info("Received EOF from peer Sum via fanout", "clientID", clientID, "senderID", innerMsg.SenderID)
 
-	if sum.clientFinished[clientID] {
+	records, ok := sum.store.FinishAndEvict(clientID)
+	if !ok {
 		// Already processed for this client
 		return
 	}
 
-	sum.flushAndFinishClient(clientID)
+	sum.flushAndFinishClient(clientID, records)
 }
 
-func (sum *Sum) flushAndFinishClient(clientID string) {
+func (sum *Sum) flushAndFinishClient(clientID string, records []fruititem.FruitItem) {
 	// 1. Send all accumulated FruitTotalAmount messages to partitioned Aggregators
-	if clientSums, ok := sum.fruitItemMap[clientID]; ok {
-		for _, record := range clientSums {
-			partition := sum.hashFruit(record.Fruit)
-			routingKey := fmt.Sprintf("%s_%d", sum.config.AggregationPrefix, partition)
+	for _, record := range records {
+		partition := sum.hashFruit(record.Fruit)
+		routingKey := fmt.Sprintf("%s_%d", sum.config.AggregationPrefix, partition)
 
-			msg, err := inner.SerializeDataMessage(clientID, []fruititem.FruitItem{record})
-			if err != nil {
-				slog.Error("While serializing fruit total amount message", "err", err)
-				continue
-			}
+		msg, err := inner.SerializeDataMessage(clientID, []fruititem.FruitItem{record})
+		if err != nil {
+			slog.Error("While serializing fruit total amount message", "err", err)
+			continue
+		}
 
-			if err := sum.outputExchange.SendTo(routingKey, *msg); err != nil {
-				slog.Error("While sending fruit total amount to aggregator", "routingKey", routingKey, "err", err)
-			}
+		if err := sum.outputExchange.SendTo(routingKey, *msg); err != nil {
+			slog.Error("While sending fruit total amount to aggregator", "routingKey", routingKey, "err", err)
 		}
 	}
 
@@ -227,10 +212,6 @@ func (sum *Sum) flushAndFinishClient(clientID string) {
 			}
 		}
 	}
-
-	// 3. Mark client finished and clean up memory
-	sum.clientFinished[clientID] = true
-	delete(sum.fruitItemMap, clientID)
 }
 
 func (sum *Sum) hashFruit(fruit string) int {

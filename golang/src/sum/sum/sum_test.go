@@ -6,6 +6,70 @@ import (
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/fruititem"
 )
 
+func TestSumSessionStore(t *testing.T) {
+	store := NewSumSessionStore()
+
+	// Accumulate records for client-1
+	added := store.AddRecords("client-1", []fruititem.FruitItem{
+		{Fruit: "apple", Amount: 10},
+		{Fruit: "banana", Amount: 5},
+	})
+	if !added {
+		t.Fatal("expected records to be added")
+	}
+
+	store.AddRecords("client-1", []fruititem.FruitItem{
+		{Fruit: "apple", Amount: 15},
+		{Fruit: "orange", Amount: 7},
+	})
+
+	// Accumulate for client-2
+	store.AddRecords("client-2", []fruititem.FruitItem{
+		{Fruit: "apple", Amount: 100},
+	})
+
+	// Verify client-1 records
+	c1Records, ok := store.GetClientRecords("client-1")
+	if !ok || len(c1Records) != 3 {
+		t.Fatalf("expected 3 records for client-1, got %d", len(c1Records))
+	}
+
+	recordMap := make(map[string]uint32)
+	for _, r := range c1Records {
+		recordMap[r.Fruit] = r.Amount
+	}
+	if recordMap["apple"] != 25 || recordMap["banana"] != 5 || recordMap["orange"] != 7 {
+		t.Errorf("unexpected sums for client-1: %+v", recordMap)
+	}
+
+	// Verify client-2
+	c2Records, ok := store.GetClientRecords("client-2")
+	if !ok || len(c2Records) != 1 || c2Records[0].Amount != 100 {
+		t.Errorf("unexpected sums for client-2: %+v", c2Records)
+	}
+
+	// Finish client-1
+	evicted, finishedOk := store.FinishAndEvict("client-1")
+	if !finishedOk || len(evicted) != 3 {
+		t.Fatalf("expected 3 evicted records on finish, got %d", len(evicted))
+	}
+	if !store.IsFinished("client-1") {
+		t.Error("expected client-1 to be marked finished")
+	}
+
+	// Second finish should return false
+	_, finishedAgain := store.FinishAndEvict("client-1")
+	if finishedAgain {
+		t.Error("expected second finish to return false")
+	}
+
+	// Data added after finish should be rejected
+	addedAfter := store.AddRecords("client-1", []fruititem.FruitItem{{Fruit: "apple", Amount: 5}})
+	if addedAfter {
+		t.Error("expected data added after finish to be rejected")
+	}
+}
+
 func TestSumStateAccumulation(t *testing.T) {
 	config := SumConfig{
 		Id:                0,
@@ -16,9 +80,8 @@ func TestSumStateAccumulation(t *testing.T) {
 	}
 
 	sumNode := &Sum{
-		config:         config,
-		fruitItemMap:   make(map[string]map[string]fruititem.FruitItem),
-		clientFinished: make(map[string]bool),
+		config: config,
+		store:  NewSumSessionStore(),
 	}
 
 	// Process data messages for client-1
@@ -37,27 +100,31 @@ func TestSumStateAccumulation(t *testing.T) {
 	})
 
 	// Check client-1
-	c1Map := sumNode.fruitItemMap["client-1"]
-	if c1Map == nil {
-		t.Fatalf("expected map for client-1")
+	c1Records, ok := sumNode.store.GetClientRecords("client-1")
+	if !ok {
+		t.Fatalf("expected records for client-1")
 	}
-	if c1Map["apple"].Amount != 25 {
-		t.Errorf("expected apple amount 25, got %d", c1Map["apple"].Amount)
+	recordMap := make(map[string]uint32)
+	for _, r := range c1Records {
+		recordMap[r.Fruit] = r.Amount
 	}
-	if c1Map["banana"].Amount != 5 {
-		t.Errorf("expected banana amount 5, got %d", c1Map["banana"].Amount)
+	if recordMap["apple"] != 25 {
+		t.Errorf("expected apple amount 25, got %d", recordMap["apple"])
 	}
-	if c1Map["orange"].Amount != 7 {
-		t.Errorf("expected orange amount 7, got %d", c1Map["orange"].Amount)
+	if recordMap["banana"] != 5 {
+		t.Errorf("expected banana amount 5, got %d", recordMap["banana"])
+	}
+	if recordMap["orange"] != 7 {
+		t.Errorf("expected orange amount 7, got %d", recordMap["orange"])
 	}
 
 	// Check client-2 isolation
-	c2Map := sumNode.fruitItemMap["client-2"]
-	if c2Map == nil {
-		t.Fatalf("expected map for client-2")
+	c2Records, ok := sumNode.store.GetClientRecords("client-2")
+	if !ok {
+		t.Fatalf("expected records for client-2")
 	}
-	if c2Map["apple"].Amount != 100 {
-		t.Errorf("expected apple amount 100, got %d", c2Map["apple"].Amount)
+	if len(c2Records) != 1 || c2Records[0].Amount != 100 {
+		t.Errorf("expected apple amount 100, got %+v", c2Records)
 	}
 }
 
