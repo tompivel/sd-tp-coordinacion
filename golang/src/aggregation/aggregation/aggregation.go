@@ -3,8 +3,6 @@ package aggregation
 import (
 	"fmt"
 	"log/slog"
-	"sort"
-	"sync"
 
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/fruititem"
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/messageprotocol/inner"
@@ -27,9 +25,7 @@ type Aggregation struct {
 	config        AggregationConfig
 	outputQueue   middleware.Middleware
 	inputExchange middleware.Middleware
-	fruitSums     map[string]map[string]fruititem.FruitItem // clientID -> fruit -> FruitItem
-	eofsReceived  map[string]map[int]bool                  // clientID -> sumID -> bool
-	mu            sync.Mutex
+	store         *AggregatorSessionStore
 }
 
 func NewAggregation(config AggregationConfig) (*Aggregation, error) {
@@ -53,8 +49,7 @@ func NewAggregation(config AggregationConfig) (*Aggregation, error) {
 		config:        config,
 		outputQueue:   outputQueue,
 		inputExchange: inputExchange,
-		fruitSums:     make(map[string]map[string]fruititem.FruitItem),
-		eofsReceived:  make(map[string]map[int]bool),
+		store:         NewAggregatorSessionStore(config.SumAmount, config.TopSize),
 	}, nil
 }
 
@@ -87,65 +82,26 @@ func (aggregation *Aggregation) handleMessage(msg middleware.Message, ack func()
 }
 
 func (aggregation *Aggregation) handleDataMessage(clientID string, records []fruititem.FruitItem) {
-	aggregation.mu.Lock()
-	defer aggregation.mu.Unlock()
-
-	if aggregation.fruitSums[clientID] == nil {
-		aggregation.fruitSums[clientID] = make(map[string]fruititem.FruitItem)
-	}
-
-	for _, fruitRecord := range records {
-		if existing, ok := aggregation.fruitSums[clientID][fruitRecord.Fruit]; ok {
-			aggregation.fruitSums[clientID][fruitRecord.Fruit] = existing.Sum(fruitRecord)
-		} else {
-			aggregation.fruitSums[clientID][fruitRecord.Fruit] = fruitRecord
-		}
-	}
+	aggregation.store.AddRecords(clientID, records)
 }
 
 func (aggregation *Aggregation) handleEOFMessage(clientID string, sumID int) {
-	aggregation.mu.Lock()
-	defer aggregation.mu.Unlock()
-
 	slog.Info("Received EOF from Sum worker", "clientID", clientID, "sumID", sumID)
 
-	if aggregation.eofsReceived[clientID] == nil {
-		aggregation.eofsReceived[clientID] = make(map[int]bool)
-	}
-	aggregation.eofsReceived[clientID][sumID] = true
-
-	// Check if all N Sum workers have reported EOF for this client
-	if len(aggregation.eofsReceived[clientID]) == aggregation.config.SumAmount {
-		slog.Info("Barrier reached for client, emitting partial top", "clientID", clientID)
-
-		partialTop := aggregation.buildFruitTop(clientID)
-
-		topMsg, err := inner.SerializeTopMessage(clientID, aggregation.config.Id, partialTop)
-		if err != nil {
-			slog.Error("While serializing partial top message", "err", err)
-		} else {
-			if err := aggregation.outputQueue.Send(*topMsg); err != nil {
-				slog.Error("While sending partial top to join queue", "err", err)
-			}
-		}
-
-		// Clean up state for this client
-		delete(aggregation.fruitSums, clientID)
-		delete(aggregation.eofsReceived, clientID)
-	}
-}
-
-func (aggregation *Aggregation) buildFruitTop(clientID string) []fruititem.FruitItem {
-	clientMap := aggregation.fruitSums[clientID]
-	fruitItems := make([]fruititem.FruitItem, 0, len(clientMap))
-	for _, item := range clientMap {
-		fruitItems = append(fruitItems, item)
+	partialTop, ready := aggregation.store.RecordEOF(clientID, sumID)
+	if !ready {
+		return
 	}
 
-	sort.SliceStable(fruitItems, func(i, j int) bool {
-		return fruitItems[j].Less(fruitItems[i])
-	})
+	slog.Info("Barrier reached for client, emitting partial top", "clientID", clientID)
 
-	finalTopSize := min(aggregation.config.TopSize, len(fruitItems))
-	return fruitItems[:finalTopSize]
+	topMsg, err := inner.SerializeTopMessage(clientID, aggregation.config.Id, partialTop)
+	if err != nil {
+		slog.Error("While serializing partial top message", "err", err)
+		return
+	}
+
+	if err := aggregation.outputQueue.Send(*topMsg); err != nil {
+		slog.Error("While sending partial top to join queue", "err", err)
+	}
 }

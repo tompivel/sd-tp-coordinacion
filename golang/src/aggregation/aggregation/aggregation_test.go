@@ -26,40 +26,45 @@ func (m *mockMiddleware) SendTo(routingKey string, msg middleware.Message) error
 }
 func (m *mockMiddleware) Close() error { return nil }
 
-func TestAggregationStateAndTop(t *testing.T) {
-	config := AggregationConfig{
-		Id:        0,
-		SumAmount: 2,
-		TopSize:   3,
-	}
+func TestAggregatorSessionStore(t *testing.T) {
+	store := NewAggregatorSessionStore(2, 3)
 
-	agg := &Aggregation{
-		config:       config,
-		fruitSums:    make(map[string]map[string]fruititem.FruitItem),
-		eofsReceived: make(map[string]map[int]bool),
-	}
-
-	// Client 1 records
-	agg.handleDataMessage("client-1", []fruititem.FruitItem{
+	// Add records
+	store.AddRecords("client-1", []fruititem.FruitItem{
 		{Fruit: "banana", Amount: 10},
 		{Fruit: "apple", Amount: 20},
 		{Fruit: "orange", Amount: 5},
 		{Fruit: "pear", Amount: 15},
 	})
 
-	top := agg.buildFruitTop("client-1")
+	// 1st EOF: should not be complete
+	top, ready := store.RecordEOF("client-1", 0)
+	if ready || top != nil {
+		t.Fatal("expected barrier not to be ready after 1 of 2 EOFs")
+	}
+
+	// 2nd EOF: should be complete
+	top, ready = store.RecordEOF("client-1", 1)
+	if !ready {
+		t.Fatal("expected barrier to be complete after 2 of 2 EOFs")
+	}
+
 	if len(top) != 3 {
 		t.Fatalf("expected top size 3, got %d", len(top))
 	}
-	// Expected descending order: apple (20), pear (15), banana (10)
 	if top[0].Fruit != "apple" || top[0].Amount != 20 {
-		t.Errorf("expected rank 1 apple 20, got %s %d", top[0].Fruit, top[0].Amount)
+		t.Errorf("expected rank 1 apple 20, got %+v", top[0])
 	}
 	if top[1].Fruit != "pear" || top[1].Amount != 15 {
-		t.Errorf("expected rank 2 pear 15, got %s %d", top[1].Fruit, top[1].Amount)
+		t.Errorf("expected rank 2 pear 15, got %+v", top[1])
 	}
 	if top[2].Fruit != "banana" || top[2].Amount != 10 {
-		t.Errorf("expected rank 3 banana 10, got %s %d", top[2].Fruit, top[2].Amount)
+		t.Errorf("expected rank 3 banana 10, got %+v", top[2])
+	}
+
+	// Session should be evicted
+	if store.HasSession("client-1") {
+		t.Error("expected session for client-1 to be evicted after completion")
 	}
 }
 
@@ -72,10 +77,9 @@ func TestAggregationBarrier(t *testing.T) {
 	}
 
 	agg := &Aggregation{
-		config:       config,
-		outputQueue:  mockOut,
-		fruitSums:    make(map[string]map[string]fruititem.FruitItem),
-		eofsReceived: make(map[string]map[int]bool),
+		config:      config,
+		outputQueue: mockOut,
+		store:       NewAggregatorSessionStore(config.SumAmount, config.TopSize),
 	}
 
 	clientID := "client-xyz"
@@ -85,18 +89,12 @@ func TestAggregationBarrier(t *testing.T) {
 
 	// 1st EOF from Sum 0
 	agg.handleEOFMessage(clientID, 0)
-	if len(agg.eofsReceived[clientID]) != 1 {
-		t.Errorf("expected 1 EOF recorded")
-	}
 	if len(mockOut.sentMessages) != 0 {
 		t.Errorf("should not emit top yet")
 	}
 
 	// 2nd EOF from Sum 1
 	agg.handleEOFMessage(clientID, 1)
-	if len(agg.eofsReceived[clientID]) != 2 {
-		t.Errorf("expected 2 EOFs recorded")
-	}
 	if len(mockOut.sentMessages) != 0 {
 		t.Errorf("should not emit top yet")
 	}
@@ -125,11 +123,8 @@ func TestAggregationBarrier(t *testing.T) {
 	}
 
 	// State must be cleaned up
-	if agg.fruitSums[clientID] != nil {
-		t.Errorf("expected fruitSums cleaned up")
-	}
-	if agg.eofsReceived[clientID] != nil {
-		t.Errorf("expected eofsReceived cleaned up")
+	if agg.store.HasSession(clientID) {
+		t.Errorf("expected session cleaned up after barrier")
 	}
 }
 
@@ -142,10 +137,9 @@ func TestAggregationEmptyClientBarrier(t *testing.T) {
 	}
 
 	agg := &Aggregation{
-		config:       config,
-		outputQueue:  mockOut,
-		fruitSums:    make(map[string]map[string]fruititem.FruitItem),
-		eofsReceived: make(map[string]map[int]bool),
+		config:      config,
+		outputQueue: mockOut,
+		store:       NewAggregatorSessionStore(config.SumAmount, config.TopSize),
 	}
 
 	// Client has 0 records received by this aggregator
