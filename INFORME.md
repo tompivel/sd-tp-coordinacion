@@ -103,7 +103,7 @@ Cada Aggregator recibe sumas parciales de distintas instancias de `Sum` para las
 
 1. **Broadcast de EOF hacia Aggregators:** Tras vaciar sus sumas locales para un cliente, cada nodo `Sum` emite un mensaje `EOF(ClientID, SumID)` hacia **todas** las $M$ particiones de Aggregation (`<AGGREGATION_PREFIX>_0 ... <AGGREGATION_PREFIX>_{M-1}`).
 2. **Barrera de $N$ EOFs Encapsulada:** Cada Aggregator delega el seguimiento en su `AggregatorSessionStore`, que utiliza un objeto `Barrier` interno para registrar los `SumID` únicos observados. La condición de disparo de la barrera es:
-   $$\text{barrier.IsComplete}() \iff \text{barrier.Count}() == N \quad (\text{SUM\_AMOUNT})$$
+   $$\text{barrier.IsComplete}() \iff \text{barrier.Count}() == N \quad (\text{SUM-AMOUNT})$$
 3. **Manejo de Clientes Sparse:** Incluso si un Aggregator no recibió ninguna fruta de un cliente (porque todas se mapearon a otras particiones), al recibir los $N$ EOFs emite un mensaje `TOP` vacío (`Records: []`) hacia el nodo `Join`. Esto evita el estancamiento de la barrera en Join.
 4. **Orden FIFO Estricto:** Dado que tanto los mensajes de datos como el EOF emitidos por un `Sum` viajan por el mismo canal y cola de RabbitMQ hacia un Aggregator específico, la especificación AMQP 0-9-1 garantiza que los datos siempre son entregados y procesados antes que el EOF de ese mismo `Sum`.
 
@@ -178,7 +178,7 @@ El nodo `Join` (instancia única) consume de la cola `join_queue`, delegando la 
 
 1. **Recepción de Tops Parciales:** Por cada mensaje `TOP` recibido, el store incorpora los registros al buffer del cliente y registra al emisor en su `Barrier` interna (`aggID`).
 2. **Condición de Disparo:** La consolidación global para un cliente se ejecuta atómicamente cuando se reciben los tops parciales de **todos los $M$ Aggregators**:
-   $$\text{barrier.IsComplete}() \iff \text{barrier.Count}() == M \quad (\text{AGGREGATION\_AMOUNT})$$
+   $$\text{barrier.IsComplete}() \iff \text{barrier.Count}() == M \quad (\text{AGGREGATION-AMOUNT})$$
 3. **Consolidación y Egress:** Se fusionan los $M$ tops parciales (un conjunto acotado de a lo sumo $M \times K$ ítems), se reordenan de forma descendente mediante `ComputeTop`, se trunca al tamaño $K$ final y se publica el `TOP` global resultante en `results_queue`.
 4. **Entrega al Cliente en Gateway:** El `Gateway` lee de `results_queue`. En su `handleClientResponse`, itera sobre las conexiones activas invocando `DeserializeResultMessage()`. Únicamente el `MessageHandler` cuyo `clientID` coincida procesará el mensaje, lo escribirá al socket TCP del cliente correspondiente y enviará el ACK a RabbitMQ.
 
@@ -225,7 +225,7 @@ Al diseñar el particionado entre los nodos `Sum` y `Aggregation`, surgió la di
 | **Escalabilidad ante grandes volúmenes de datos por cliente** | **Muy bueno:** Si un solo cliente envía 10 GB de datos con gran variedad de frutas, el volumen y cómputo de sumas se balancea equitativamente entre los $M$ Aggregators. | **Pésima (Cuello de botella):** Todo el volumen de datos del cliente recae sobre un único Aggregator. Los restantes $M-1$ Aggregators permanecen ociosos para ese cliente. |
 | **Aprovechamiento de réplicas con pocos clientes** | **Óptimo:** Incluso con 1 solo cliente (Escenario 1), todos los $M$ Aggregators trabajan en paralelo procesando subconjuntos de frutas. | **Nulo:** Si hay 1 cliente y 10 Aggregators, 9 instancias estarán al 0% de uso. |
 | **Redundancia de cómputo** | **Cero:** Cada fruta es procesada y acumulada en una única instancia de Aggregation. | **Cero:** Cada cliente es procesado por un único Aggregator. |
-| **Tráfico hacia el nodo `Join`** | **(O(MxK)):** Cada Aggregator envía a lo sumo su Top-$K$ parcial. | **(O(K)):** El único Aggregator asignado al cliente calcula el Top final y lo envía directo. |
+| **Tráfico hacia el nodo `Join`** | **O(MxK):** Cada Aggregator envía a lo sumo su Top-K parcial. | **O(K):** El único Aggregator asignado al cliente calcula el Top final y lo envía directo. |
 | **Complejidad de Coordinación** | **Mayor (Requiere barrera):** Cada Aggregator debe esperar los $N$ EOFs de todos los Sum workers antes de resolver su Top parcial. | **Baja:** El Aggregator solo necesita esperar que termine ese cliente, sin cruces entre múltiples particiones. |
 
 ### Justificación de la Elección de `fruit`
