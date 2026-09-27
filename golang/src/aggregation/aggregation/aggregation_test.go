@@ -9,13 +9,18 @@ import (
 )
 
 type mockMiddleware struct {
-	sentMessages []middleware.Message
+	sentMessages       []middleware.Message
+	stopConsumingCount int
+	closeCount         int
 }
 
 func (m *mockMiddleware) StartConsuming(callbackFunc func(msg middleware.Message, ack func(), nack func())) error {
 	return nil
 }
-func (m *mockMiddleware) StopConsuming() error { return nil }
+func (m *mockMiddleware) StopConsuming() error {
+	m.stopConsumingCount++
+	return nil
+}
 func (m *mockMiddleware) Send(msg middleware.Message) error {
 	m.sentMessages = append(m.sentMessages, msg)
 	return nil
@@ -24,7 +29,10 @@ func (m *mockMiddleware) SendTo(routingKey string, msg middleware.Message) error
 	m.sentMessages = append(m.sentMessages, msg)
 	return nil
 }
-func (m *mockMiddleware) Close() error { return nil }
+func (m *mockMiddleware) Close() error {
+	m.closeCount++
+	return nil
+}
 
 func TestAggregatorSessionStore(t *testing.T) {
 	store := NewAggregatorSessionStore(2, 3)
@@ -157,5 +165,42 @@ func TestAggregationEmptyClientBarrier(t *testing.T) {
 	}
 	if len(innerMsg.Records) != 0 {
 		t.Errorf("expected 0 records in partial top, got %d", len(innerMsg.Records))
+	}
+}
+
+func TestAggregationStopIdempotent(t *testing.T) {
+	mockIn := &mockMiddleware{}
+	mockOut := &mockMiddleware{}
+
+	agg := &Aggregation{
+		inputExchange: mockIn,
+		outputQueue:   mockOut,
+		store:         NewAggregatorSessionStore(2, 3),
+	}
+
+	// First Stop() call
+	agg.Stop()
+
+	if mockIn.stopConsumingCount != 1 {
+		t.Errorf("expected mockIn.StopConsuming() called once, got %d", mockIn.stopConsumingCount)
+	}
+	if mockIn.closeCount != 1 {
+		t.Errorf("expected mockIn.Close() called once, got %d", mockIn.closeCount)
+	}
+	if mockOut.closeCount != 1 {
+		t.Errorf("expected mockOut.Close() called once, got %d", mockOut.closeCount)
+	}
+
+	// Second Stop() call (must be no-op via sync.Once)
+	agg.Stop()
+
+	if mockIn.stopConsumingCount != 1 {
+		t.Errorf("expected mockIn.StopConsuming() still called once, got %d", mockIn.stopConsumingCount)
+	}
+	if mockIn.closeCount != 1 {
+		t.Errorf("expected mockIn.Close() still called once, got %d", mockIn.closeCount)
+	}
+	if mockOut.closeCount != 1 {
+		t.Errorf("expected mockOut.Close() still called once, got %d", mockOut.closeCount)
 	}
 }
