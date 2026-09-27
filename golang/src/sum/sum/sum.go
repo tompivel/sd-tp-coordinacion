@@ -2,7 +2,9 @@ package sum
 
 import (
 	"fmt"
+	"hash/fnv"
 	"log/slog"
+	"sync"
 
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/fruititem"
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/messageprotocol/inner"
@@ -21,9 +23,14 @@ type SumConfig struct {
 }
 
 type Sum struct {
-	inputQueue     middleware.Middleware
-	outputExchange middleware.Middleware
-	fruitItemMap   map[string]fruititem.FruitItem
+	config             SumConfig
+	inputQueue         middleware.Middleware
+	outputExchange     middleware.Middleware
+	eofFanoutConsumer  middleware.Middleware
+	eofFanoutProducer  middleware.Middleware
+	fruitItemMap       map[string]map[string]fruititem.FruitItem // clientID -> fruit -> FruitItem
+	clientFinished     map[string]bool                          // clientID -> bool
+	mu                 sync.Mutex
 }
 
 func NewSum(config SumConfig) (*Sum, error) {
@@ -48,7 +55,8 @@ func NewSum(config SumConfig) (*Sum, error) {
 	return &Sum{
 		inputQueue:     inputQueue,
 		outputExchange: outputExchange,
-		fruitItemMap:   map[string]fruititem.FruitItem{},
+		fruitItemMap:      make(map[string]map[string]fruititem.FruitItem),
+		clientFinished:    make(map[string]bool),
 	}, nil
 }
 
