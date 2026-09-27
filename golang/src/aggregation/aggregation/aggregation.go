@@ -70,7 +70,7 @@ func (aggregation *Aggregation) Run() {
 func (aggregation *Aggregation) handleMessage(msg middleware.Message, ack func(), nack func()) {
 	defer ack()
 
-	fruitRecords, isEof, err := inner.DeserializeMessage(&msg)
+	innerMsg, err := inner.DeserializeInnerMessage(&msg)
 	if err != nil {
 		slog.Error("While deserializing message", "err", err)
 		return
