@@ -246,4 +246,6 @@ El diseño implementado garantiza la escalabilidad en tres dimensiones:
 - Las consultas de múltiples clientes fluyen en paralelo a través del mismo pipeline sin posibilidad de contaminación cruzada.
 
 ### 6.2 Grandes Volúmenes de Datos
+- **Control de Memoria y Desalojo Atómico:** Los `SessionStore` liberan explícitamente los estados en memoria inmediatamente después de que se satisface la barrera y se envían los resultados downstream (`FinishAndEvict`, `RecordEOF`, `AddPartialTop`). Esto asegura una huella de memoria ínfima en el largo plazo respecto a la cantidad acumulada de clientes históricos.
+- **Acotación de Flujo hacia Join:** Gracias a la reducción temprana en Aggregation, el nodo `Join` recibe a lo sumo $M \times K$ pares `(fruta, cantidad)` por cliente, haciendo que el consumo de red y tiempo de ordenamiento global en Join sea despreciable e independiente del tamaño del archivo de entrada.
 ### 6.3 Cantidad de Controles y Resiliencia Topológica
