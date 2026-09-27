@@ -431,3 +431,11 @@ El flujo, más detallado, se define a continuación:
 3. **Despacho de Tareas en Vuelo:** Las goroutines que ejecutan `StartConsuming` están orquestadas bajo un `sync.WaitGroup`. Al cerrarse el canal de entregas de Go tras la desuscripción, se permite que la última entrega en procesamiento culmine su cómputo de dominio, libere los locks de exclusión mutua correspondientes (`sum.mu`) y envíe exitosamente el `ack()` al broker antes de ejecutar `wg.Done()`.
 4. **Cierre de Conexiones AMQP e Idempotencia (`Stop` con `sync.Once`):** Una vez que el `WaitGroup` certifica que ninguna goroutine continúa utilizando la infraestructura de transporte, se invocan secuencialmente los métodos `Close()` de todos los middlewares asociados (tanto de entrada como de salida y fanout). La ejecución de `Stop()` está encapsulada mediante `sync.Once`, previniendo condiciones de carrera ante señales repetidas o invocaciones concurrentes.
 
+### 8.3 Manejo de Errores de Consumo
+
+Además de las señales de terminación externas, los nodos deben responder adecuadamente ante anomalías en el transporte (por ejemplo, desconexión repentina de RabbitMQ o fallas irrecuperables en el canal).
+
+Para contemplar este escenario:
+- Cada goroutine de consumo supervisa el valor retornado por `StartConsuming()`.
+- Si el consumo finaliza de manera imprevista con error (`err != nil`), este se transmite a través de un canal interno tipado (`consumeErr`).
+- El `select` en `Run()` despierta de inmediato ante `case err := <-consumeErr:`, registrando el incidente vía `slog.Error` y disparando la misma rutina `Stop()`. Esto evita que el nodo quede en estado "zombi" (con el proceso vivo pero sin consumir) y permite una salida limpia para que el orquestador pueda actuar.
