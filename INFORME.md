@@ -110,3 +110,52 @@ Cada Aggregator recibe sumas parciales de distintas instancias de `Sum` para las
 3. **Manejo de Clientes Sparse:** Incluso si un Aggregator no recibió ninguna fruta de un cliente (porque todas se mapearon a otras particiones), al recibir los $N$ EOFs emite un mensaje `TOP` vacío (`Records: []`) hacia el nodo `Join`. Esto evita el estancamiento de la barrera en Join.
 4. **Orden FIFO Estricto:** Dado que tanto los mensajes de datos como el EOF emitidos por un `Sum` viajan por el mismo canal y cola de RabbitMQ hacia un Aggregator específico, la especificación AMQP 0-9-1 garantiza que los datos siempre son entregados y procesados antes que el EOF de ese mismo `Sum`.
 
+### 3.5 Diagrama de Secuencia: Coordinación Sum $\to$ Aggregation
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor GW as Gateway
+    participant S0 as Sum 0
+    participant S1 as Sum 1
+    participant ExEOF as Exchange (sum_eof)
+    participant ExAgg as Exchange (sum_agg)
+    participant A0 as Aggregator 0 (hash mod M = 0)
+    participant A1 as Aggregator 1 (hash mod M = 1)
+
+    Note over GW,S1: Ingesta de datos distribuida
+    GW->>S0: DATA(clientID, "manzana", 10)
+    GW->>S1: DATA(clientID, "banana", 20)
+    GW->>S0: DATA(clientID, "manzana", 5)
+    Note over S0: Acumula: manzana -> 15
+    Note over S1: Acumula: banana -> 20
+
+    Note over GW,S0: Gateway recibe fin de stream del cliente
+    GW->>S0: EOF(clientID)
+
+    Note over S0,ExEOF: S0 propaga EOF a peer Sums vía Fanout
+    S0->>ExEOF: EOF(clientID, sender: S0)
+    ExEOF-->>S1: EOF(clientID, sender: S0)
+
+    par Flush de S0
+        Note over S0: hash("manzana") % 2 = 0
+        S0->>ExAgg: DATA(clientID, "manzana", 15) -> rkey: agg_0
+        ExAgg-->>A0: DATA("manzana", 15)
+        S0->>ExAgg: EOF(clientID, sender: S0) -> rkey: agg_0
+        ExAgg-->>A0: EOF(sender: S0)
+        S0->>ExAgg: EOF(clientID, sender: S0) -> rkey: agg_1
+        ExAgg-->>A1: EOF(sender: S0)
+    and Flush de S1 (al recibir fanout)
+        Note over S1: hash("banana") % 2 = 1
+        S1->>ExAgg: DATA(clientID, "banana", 20) -> rkey: agg_1
+        ExAgg-->>A1: DATA("banana", 20)
+        S1->>ExAgg: EOF(clientID, sender: S1) -> rkey: agg_0
+        ExAgg-->>A0: EOF(sender: S1)
+        S1->>ExAgg: EOF(clientID, sender: S1) -> rkey: agg_1
+        ExAgg-->>A1: EOF(sender: S1)
+    end
+
+    Note over A0: Recibió EOF de S0 y S1 (N=2) -> Barrera Completa!
+    Note over A1: Recibió EOF de S0 y S1 (N=2) -> Barrera Completa!
+```
+
