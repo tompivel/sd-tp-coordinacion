@@ -3,7 +3,10 @@ package aggregation
 import (
 	"fmt"
 	"log/slog"
-	"sort"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/fruititem"
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/messageprotocol/inner"
@@ -23,10 +26,12 @@ type AggregationConfig struct {
 }
 
 type Aggregation struct {
+	config        AggregationConfig
 	outputQueue   middleware.Middleware
 	inputExchange middleware.Middleware
-	fruitItemMap  map[string]fruititem.FruitItem
-	topSize       int
+	store         *AggregatorSessionStore
+	stopOnce      sync.Once
+	wg            sync.WaitGroup
 }
 
 func NewAggregation(config AggregationConfig) (*Aggregation, error) {
@@ -37,91 +42,118 @@ func NewAggregation(config AggregationConfig) (*Aggregation, error) {
 		return nil, err
 	}
 
-	inputExchangeRoutingKey := []string{fmt.Sprintf("%s_%d", config.AggregationPrefix, config.Id)}
-	inputExchange, err := middleware.CreateExchangeMiddleware(config.AggregationPrefix, inputExchangeRoutingKey, connSettings)
+	queueName := fmt.Sprintf("%s_%d", config.AggregationPrefix, config.Id)
+	routingKey := fmt.Sprintf("%s_%d", config.AggregationPrefix, config.Id)
+
+	inputExchange, err := middleware.CreateNamedTopicConsumerMiddleware(config.AggregationPrefix, queueName, routingKey, connSettings)
 	if err != nil {
 		outputQueue.Close()
 		return nil, err
 	}
 
 	return &Aggregation{
+		config:        config,
 		outputQueue:   outputQueue,
 		inputExchange: inputExchange,
-		fruitItemMap:  map[string]fruititem.FruitItem{},
-		topSize:       config.TopSize,
+		store:         NewAggregatorSessionStore(config.SumAmount, config.TopSize),
 	}, nil
 }
 
 func (aggregation *Aggregation) Run() {
-	aggregation.inputExchange.StartConsuming(func(msg middleware.Message, ack, nack func()) {
-		aggregation.handleMessage(msg, ack, nack)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+
+	consumeErr := make(chan error, 1)
+
+	aggregation.wg.Add(1)
+	go func() {
+		defer aggregation.wg.Done()
+		err := aggregation.inputExchange.StartConsuming(func(msg middleware.Message, ack, nack func()) {
+			aggregation.handleMessage(msg, ack, nack)
+		})
+		if err != nil {
+			slog.Error("In inputExchange StartConsuming", "err", err)
+			consumeErr <- err
+		}
+	}()
+
+	select {
+	case sig := <-sigChan:
+		slog.Info("Termination signal received in Aggregation", "signal", sig)
+	case err := <-consumeErr:
+		slog.Error("Aggregation consumer stopped unexpectedly", "err", err)
+	}
+
+	aggregation.Stop()
+}
+
+func (aggregation *Aggregation) Stop() {
+	aggregation.stopOnce.Do(func() {
+		slog.Info("Stopping Aggregation node...")
+		if aggregation.inputExchange != nil {
+			if err := aggregation.inputExchange.StopConsuming(); err != nil {
+				slog.Debug("While stopping inputExchange consuming in Aggregation", "err", err)
+			}
+		}
+
+		// Wait for active message processing callback to finish and ACK
+		aggregation.wg.Wait()
+
+		if aggregation.inputExchange != nil {
+			if err := aggregation.inputExchange.Close(); err != nil {
+				slog.Debug("While closing inputExchange in Aggregation", "err", err)
+			}
+		}
+		if aggregation.outputQueue != nil {
+			if err := aggregation.outputQueue.Close(); err != nil {
+				slog.Debug("While closing outputQueue in Aggregation", "err", err)
+			}
+		}
+		slog.Info("Aggregation node stopped cleanly")
 	})
 }
 
 func (aggregation *Aggregation) handleMessage(msg middleware.Message, ack func(), nack func()) {
 	defer ack()
 
-	fruitRecords, isEof, err := inner.DeserializeMessage(&msg)
+	innerMsg, err := inner.DeserializeInnerMessage(&msg)
 	if err != nil {
 		slog.Error("While deserializing message", "err", err)
 		return
 	}
 
-	if isEof {
-		if err := aggregation.handleEndOfRecordsMessage(); err != nil {
-			slog.Error("While handling end of record message", "err", err)
-		}
+	switch innerMsg.Type {
+	case inner.MsgData:
+		aggregation.handleDataMessage(innerMsg.ClientID, innerMsg.Records)
+	case inner.MsgEOF:
+		aggregation.handleEOFMessage(innerMsg.ClientID, innerMsg.SenderID)
+	default:
+		slog.Warn("Unknown inner message type", "type", innerMsg.Type)
+	}
+}
+
+func (aggregation *Aggregation) handleDataMessage(clientID string, records []fruititem.FruitItem) {
+	aggregation.store.AddRecords(clientID, records)
+}
+
+func (aggregation *Aggregation) handleEOFMessage(clientID string, sumID int) {
+	slog.Info("Received EOF from Sum worker", "clientID", clientID, "sumID", sumID)
+
+	partialTop, ready := aggregation.store.RecordEOF(clientID, sumID)
+	if !ready {
 		return
 	}
 
-	aggregation.handleDataMessage(fruitRecords)
-}
+	slog.Info("Barrier reached for client, emitting partial top", "clientID", clientID)
 
-func (aggregation *Aggregation) handleEndOfRecordsMessage() error {
-	slog.Info("Received End Of Records message")
-
-	fruitTopRecords := aggregation.buildFruitTop()
-	message, err := inner.SerializeMessage(fruitTopRecords)
+	topMsg, err := inner.SerializeTopMessage(clientID, aggregation.config.Id, partialTop)
 	if err != nil {
-		slog.Debug("While serializing top message", "err", err)
-		return err
-	}
-	if err := aggregation.outputQueue.Send(*message); err != nil {
-		slog.Debug("While sending top message", "err", err)
-		return err
+		slog.Error("While serializing partial top message", "err", err)
+		return
 	}
 
-	eofMessage := []fruititem.FruitItem{}
-	message, err = inner.SerializeMessage(eofMessage)
-	if err != nil {
-		slog.Debug("While serializing EOF message", "err", err)
-		return err
+	if err := aggregation.outputQueue.Send(*topMsg); err != nil {
+		slog.Error("While sending partial top to join queue", "err", err)
 	}
-	if err := aggregation.outputQueue.Send(*message); err != nil {
-		slog.Debug("While sending EOF message", "err", err)
-		return err
-	}
-	return nil
-}
-
-func (aggregation *Aggregation) handleDataMessage(fruitRecords []fruititem.FruitItem) {
-	for _, fruitRecord := range fruitRecords {
-		if _, ok := aggregation.fruitItemMap[fruitRecord.Fruit]; ok {
-			aggregation.fruitItemMap[fruitRecord.Fruit] = aggregation.fruitItemMap[fruitRecord.Fruit].Sum(fruitRecord)
-		} else {
-			aggregation.fruitItemMap[fruitRecord.Fruit] = fruitRecord
-		}
-	}
-}
-
-func (aggregation *Aggregation) buildFruitTop() []fruititem.FruitItem {
-	fruitItems := make([]fruititem.FruitItem, 0, len(aggregation.fruitItemMap))
-	for _, item := range aggregation.fruitItemMap {
-		fruitItems = append(fruitItems, item)
-	}
-	sort.SliceStable(fruitItems, func(i, j int) bool {
-		return fruitItems[j].Less(fruitItems[i])
-	})
-	finalTopSize := min(aggregation.topSize, len(fruitItems))
-	return fruitItems[:finalTopSize]
 }
